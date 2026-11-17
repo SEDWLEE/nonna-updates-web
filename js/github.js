@@ -34,9 +34,13 @@ async function githubFetch(token, url, opts = {}) {
   });
 }
 
-export async function getFile(token, path) {
-  const res = await githubFetch(token, contentsUrl(path));
-  if (res.status === 404) return { path, sha: null, text: "", missing: true };
+export async function getFile(token, path, { etag } = {}) {
+  const extra = {};
+  if (etag) extra["If-None-Match"] = etag;
+  const res = await githubFetch(token, contentsUrl(path), { headers: extra });
+  const nextEtag = res.headers.get("ETag") || etag || null;
+  if (res.status === 304) return { path, notModified: true, etag: nextEtag, missing: false };
+  if (res.status === 404) return { path, sha: null, text: "", missing: true, etag: null };
   if (!res.ok) {
     const err = new Error(await errorMessage(res));
     err.status = res.status;
@@ -51,7 +55,25 @@ export async function getFile(token, path) {
     if (!raw.ok) throw new Error(`Could not download ${path}`);
     text = await raw.text();
   }
-  return { path, sha: body.sha, text, missing: false };
+  return { path, sha: body.sha, text, missing: false, etag: nextEtag, notModified: false };
+}
+
+/** Latest commit sha on the data branch. 304s (If-None-Match) mean nothing changed. */
+export async function getLatestRef(token, { etag } = {}) {
+  const url = `${API_BASE}/repos/${DATA_OWNER}/${DATA_REPO}/git/ref/heads/${encodeURIComponent(DATA_BRANCH)}`;
+  const extra = {};
+  if (etag) extra["If-None-Match"] = etag;
+  const res = await githubFetch(token, url, { headers: extra });
+  const nextEtag = res.headers.get("ETag") || etag || null;
+  if (res.status === 304) return { notModified: true, sha: null, etag: nextEtag };
+  if (!res.ok) {
+    const err = new Error(await errorMessage(res));
+    err.status = res.status;
+    throw err;
+  }
+  const body = await res.json();
+  const sha = body.object?.sha || body.sha || null;
+  return { notModified: false, sha, etag: nextEtag };
 }
 
 export async function putFile(token, path, { text, sha, message }) {

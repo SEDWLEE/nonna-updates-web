@@ -6,7 +6,7 @@ import {
 } from "./date.js";
 import { itemKind, normaliseBarcode, sameBarcode } from "./parse.js";
 
-const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 export { WEEKDAYS };
 
 function firstName(name) {
@@ -507,17 +507,20 @@ function applyToWeek(week, edit, by, at) {
   if (!Array.isArray(week.riders)) week.riders = [];
   let rider = week.riders.find((r) => eqName(r.name, edit.riderName));
   if (!rider) {
-    rider = { name: edit.riderName, days: {} };
+    rider = { name: edit.riderName, status: {} };
     week.riders.push(rider);
     week.riders.sort((a, b) => String(a.name).localeCompare(String(b.name), "en", { sensitivity: "base" }));
   }
-  if (!rider.days || Array.isArray(rider.days)) rider.days = {};
+  if (!rider.status || typeof rider.status !== "object" || Array.isArray(rider.status)) rider.status = {};
   const status = edit.status || "none";
-  if (status === "none") delete rider.days[edit.day];
-  else rider.days[edit.day] = status;
-  rider.days[edit.day + "Manual"] = true;
-  rider.manual = rider.manual || {};
-  rider.manual[edit.day] = { by, at, source: "manual" };
+  const day = normaliseDay(edit.day);
+  // Tidy differently spelled keys so there is one entry per day, matching the app.
+  for (const k of Object.keys(rider.status)) {
+    if (k !== day && normaliseDay(k) === day) delete rider.status[k];
+  }
+  rider.status[day] = status;
+  rider.manual = rider.manual && typeof rider.manual === "object" ? rider.manual : {};
+  rider.manual[day] = { manual: true, status, editedBy: by, editedAt: at };
 }
 
 export function planChanges(weekStarting, saved, edited) {
@@ -583,17 +586,16 @@ export function contractedGrid(rows, current) {
 
 function normaliseDay(s) {
   const t = String(s || "").trim().toLowerCase();
-  const map = { mon: "Monday", monday: "Monday", tue: "Tuesday", tues: "Tuesday", tuesday: "Tuesday",
-    wed: "Wednesday", wednesday: "Wednesday", thu: "Thursday", thur: "Thursday", thursday: "Thursday",
-    fri: "Friday", friday: "Friday" };
+  const map = { mon: "Mon", monday: "Mon", tue: "Tue", tues: "Tue", tuesday: "Tue",
+    wed: "Wed", wednesday: "Wed", thu: "Thu", thur: "Thu", thursday: "Thu",
+    fri: "Fri", friday: "Fri" };
   return map[t] || (WEEKDAYS.find((d) => d.toLowerCase() === t) || s);
 }
 
 export function daysLabel(days) {
   const norm = (days || []).map(normaliseDay).filter((d) => WEEKDAYS.includes(d));
   if (norm.length === 5) return "Mon–Fri";
-  const short = { Monday: "Mon", Tuesday: "Tue", Wednesday: "Wed", Thursday: "Thu", Friday: "Fri" };
-  return norm.map((d) => short[d]).join("·") || "As needed";
+  return norm.join("·") || "As needed";
 }
 
 export function appendCheckout(checkoutsRoot, record) {

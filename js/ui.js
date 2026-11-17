@@ -76,7 +76,7 @@ function renderShell(state) {
       <aside class="sidebar">
         <div class="brand">
           <div class="mark">N</div>
-          <div><strong>Nonna Updates</strong><span>Linked to the phone app</span></div>
+          <div><strong>Nonna Updates</strong><span>Linked to the app</span></div>
         </div>
         <nav class="menu">
           ${nav("home", "Home")}
@@ -640,7 +640,7 @@ function modalStaffAdd() {
       <form data-action="save-staff">
         <div class="field"><label>Name</label><input name="name" required></div>
         <div class="field"><label>Role</label><input name="role" value="Rider"></div>
-        <div class="field"><label>Contracted days (e.g. Mon–Fri)</label><input name="days" value="Monday,Tuesday,Wednesday,Thursday,Friday"></div>
+        <div class="field"><label>Contracted days (e.g. Mon–Fri)</label><input name="days" value="Mon,Tue,Wed,Thu,Fri"></div>
         <div class="actions">
           <button type="button" class="btn" data-action="close-modal">Cancel</button>
           <button type="submit" class="btn primary">Add</button>

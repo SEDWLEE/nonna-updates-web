@@ -105,16 +105,31 @@ function riderStatus(raw) {
   return s;
 }
 
+const ROTA_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+
+function dayKey(k) {
+  const t = String(k || "").trim().toLowerCase();
+  const map = { mon: "Mon", monday: "Mon", tue: "Tue", tues: "Tue", tuesday: "Tue",
+    wed: "Wed", wednesday: "Wed", thu: "Thu", thur: "Thu", thursday: "Thu",
+    fri: "Fri", friday: "Fri" };
+  return map[t] || null;
+}
+
 function parseRider(o) {
   const name = str(o, "name") || str(o, "rider") || str(o, "riderName");
   const days = {};
-  const WEEKDAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday"];
-  const src = o.days && typeof o.days === "object" && !Array.isArray(o.days) ? o.days : o;
-  for (const d of WEEKDAYS) {
-    const v = src[d] ?? src[d.toLowerCase()] ?? src[d.slice(0, 3)] ?? src[d.slice(0, 3).toLowerCase()];
+  // Canonical shape is status:{ Mon:"working" }. Also accept a days object or long day names.
+  const src = (o.status && typeof o.status === "object" && !Array.isArray(o.status)) ? o.status
+    : (o.days && typeof o.days === "object" && !Array.isArray(o.days)) ? o.days
+    : o;
+  for (const d of ROTA_DAYS) days[d] = "none";
+  for (const [k, raw] of Object.entries(src)) {
+    const d = dayKey(k);
+    if (!d) continue;
+    const v = (raw && typeof raw === "object") ? (raw.status ?? raw.value) : raw;
     days[d] = riderStatus(v);
   }
-  return { name, id: str(o, "id") || str(o, "memberId"), days, raw: o };
+  return { name, id: str(o, "id") || str(o, "memberId"), days, raw: o, manual: o.manual || {} };
 }
 
 function weekOf(o) {
@@ -130,7 +145,7 @@ export function parseFeed(text) {
   const blocks = (rotasRaw.length ? rotasRaw : legacy).filter((o) => o && typeof o === "object");
   const rotas = blocks.map((o) => ({
     weekStarting: weekOf(o),
-    days: asArray(o.days).length ? asArray(o.days).map(String) : ["Monday","Tuesday","Wednesday","Thursday","Friday"],
+    days: asArray(o.days).length ? asArray(o.days).map(String) : ["Mon","Tue","Wed","Thu","Fri"],
     dates: o.dates && typeof o.dates === "object" ? o.dates : {},
     riders: asArray(o.riders).map(parseRider),
     holidayRequests: asArray(o.holidayRequests || o.holidays),

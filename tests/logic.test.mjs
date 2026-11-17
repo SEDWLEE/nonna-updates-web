@@ -8,7 +8,7 @@ import {
   whatsAppUrl,
 } from "../js/logic.js";
 import { mondayOf as dateMonday, londonToday, currentPeriod, addDays } from "../js/date.js";
-import { normaliseBarcode, sameBarcode, parseItems, parseRepairs } from "../js/parse.js";
+import { normaliseBarcode, sameBarcode, parseItems, parseRepairs, parseFeed } from "../js/parse.js";
 
 describe("dates", () => {
   it("mondayOf lands on Monday", () => {
@@ -147,31 +147,34 @@ describe("rota feed writes preserve staff and updates", () => {
     const root = {
       updates: [{ id: 1, text: "hello" }],
       staff: [{ name: "Jenny's person" }],
-      rotas: [{ weekStarting: "2026-11-16", riders: [{ name: "Shane", days: { Monday: "working" } }] }],
+      rotas: [{ weekStarting: "2026-11-16", riders: [{ name: "Shane", status: { Mon: "working" } }] }],
     };
     const next = applyRotaEditsToFeed(root, [
-      { weekStarting: "2026-11-16", riderName: "Shane", day: "Tuesday", status: "working" },
+      { weekStarting: "2026-11-16", riderName: "Shane", day: "Tue", status: "working" },
     ], "Sam", "2026-11-17T12:00:00Z");
     assert.deepEqual(next.updates, root.updates);
     assert.deepEqual(next.staff, root.staff);
-    assert.equal(next.rotas[0].riders[0].days.Tuesday, "working");
+    assert.equal(next.rotas[0].riders[0].status.Mon, "working");
+    assert.equal(next.rotas[0].riders[0].status.Tue, "working");
+    assert.equal(next.rotas[0].riders[0].manual.Tue.manual, true);
   });
   it("creates a missing week in rotas[]", () => {
     const root = { updates: [], staff: [], rotas: [] };
     const next = applyRotaEditsToFeed(root, [
-      { weekStarting: "2026-11-23", riderName: "Shane", day: "Monday", status: "holiday" },
+      { weekStarting: "2026-11-23", riderName: "Shane", day: "Mon", status: "holiday" },
     ], "Sam", "at");
     assert.equal(next.rotas.length, 1);
     assert.equal(next.rotas[0].weekStarting, "2026-11-23");
-    assert.equal(next.rotas[0].riders[0].days.Monday, "holiday");
+    assert.equal(next.rotas[0].days[0], "Mon");
+    assert.equal(next.rotas[0].riders[0].status.Mon, "holiday");
     assert.equal(next.updates.length, 0);
   });
   it("planChanges reports diffs only", () => {
-    const saved = { Shane: { Monday: "working", Tuesday: "none" } };
-    const edited = { Shane: { Monday: "working", Tuesday: "holiday" } };
+    const saved = { Shane: { Mon: "working", Tue: "none" } };
+    const edited = { Shane: { Mon: "working", Tue: "holiday" } };
     const ch = planChanges("2026-11-16", saved, edited);
     assert.equal(ch.length, 1);
-    assert.equal(ch[0].day, "Tuesday");
+    assert.equal(ch[0].day, "Tue");
   });
 });
 
@@ -189,5 +192,15 @@ describe("parsers", () => {
     assert.equal(items[0].barcode, "x");
     const repairs = parseRepairs(JSON.stringify({ repairs: [{ id: "1", bike: "Bike 7", type: "tyre" }] }));
     assert.equal(repairs[0].bike, "Bike 7");
+  });
+  it("parseFeed reads status Mon–Fri keys", async () => {
+    const feed = parseFeed(JSON.stringify({
+      rotas: [{ weekStarting: "2026-11-16", days: ["Mon","Tue","Wed","Thu","Fri"], riders: [
+        { name: "Shane", status: { Mon: "working", Wed: "holiday" } },
+      ]}],
+    }));
+    assert.equal(feed.rotas[0].riders[0].days.Mon, "working");
+    assert.equal(feed.rotas[0].riders[0].days.Tue, "none");
+    assert.equal(feed.rotas[0].riders[0].days.Wed, "holiday");
   });
 });

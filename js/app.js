@@ -14,7 +14,7 @@ import {
   parseRepairs, parseStaffFile, parseStock, parseStockCounts, parseStockDetails,
   normaliseBarcode,
 } from "./parse.js";
-import { commitFile, loadAll } from "./api.js";
+import { commitFile, loadAll, pollDataRevision, rememberRevision, clearDataCache } from "./api.js";
 import {
   getActor, isUnlocked, loadVault, lock as lockSession, unlockWithPin, unlockWithToken,
 } from "./auth.js";
@@ -74,8 +74,37 @@ function routeFromHash() {
   if (state.page === "admin" && sub) state.adminTab = sub === "rota" ? "rota" : "staff";
 }
 
-function paint() {
+const REFRESH_MS = 20_000;
+let refreshTimer = null;
+let refreshing = false;
+let writing = false;
+
+function snapshotScroll() {
+  const content = document.querySelector(".content");
+  const side = document.querySelector(".side-panel");
+  return { content: content ? content.scrollTop : 0, side: side ? side.scrollTop : 0 };
+}
+
+function restoreScroll(s) {
+  if (!s) return;
+  const content = document.querySelector(".content");
+  const side = document.querySelector(".side-panel");
+  if (content) content.scrollTop = s.content;
+  if (side) side.scrollTop = s.side;
+}
+
+function interactionBusy() {
+  if (state.modal) return true;
+  const el = document.activeElement;
+  if (!el || el === document.body || el === document.documentElement) return false;
+  if (el.matches("input, textarea, select")) return true;
+  if (el.closest("form[data-action]")) return true;
+  return false;
+}
+
+function paint(opts = {}) {
   if (!root) return;
+  const scroll = opts.preserveScroll ? snapshotScroll() : null;
   const pinInputFocused = document.activeElement && document.activeElement.id === "pin-input";
   const pinVal = pinInputFocused ? document.activeElement.value : null;
   root.innerHTML = render(state);
@@ -86,6 +115,76 @@ function paint() {
       input.focus();
       try { input.setSelectionRange(input.value.length, input.value.length); } catch { /* ignore */ }
     }
+  } else if (scroll) {
+    restoreScroll(scroll);
+  }
+}
+
+async function saveFile(path, message, mutator, opts) {
+  writing = true;
+  try {
+    return await commitFile(path, message, mutator, opts);
+  } finally {
+    writing = false;
+  }
+}
+
+async function quietRefresh({ force = false } = {}) {
+  if (!state.unlocked || state.pinBusy || state.loading || writing || refreshing) return;
+  refreshing = true;
+  try {
+    const today = londonToday();
+    let changed = force;
+    if (!force) {
+      try {
+        const rev = await pollDataRevision();
+        if (rev.changed) changed = true;
+        if (rev.sha) rememberRevision(rev.sha);
+      } catch {
+        return;
+      }
+    }
+    const dayRolled = today !== state.today;
+    if (!changed && !dayRolled) return;
+    if (changed) {
+      const files = await loadAll(Object.values(FILES));
+      parseData(files);
+    } else {
+      state.today = today;
+      const held = new Set();
+      for (const rec of state.data.checkouts || []) {
+        if (rec.date === today) held.add(rec.riderId || rec.riderName);
+      }
+      state.outToday = held.size;
+    }
+    if (interactionBusy()) return;
+    paint({ preserveScroll: true });
+  } finally {
+    refreshing = false;
+  }
+}
+
+function startAutoRefresh() {
+  stopAutoRefresh();
+  refreshTimer = setInterval(() => {
+    if (document.visibilityState === "visible") quietRefresh();
+  }, REFRESH_MS);
+}
+
+function stopAutoRefresh() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+}
+
+function onVisibility() {
+  if (!state.unlocked) return;
+  if (document.visibilityState === "visible") {
+    quietRefresh();
+    startAutoRefresh();
+  } else {
+    stopAutoRefresh();
   }
 }
 
@@ -155,6 +254,7 @@ async function unlockFlow() {
     state.pinError = "";
     paint();
     await refresh();
+    startAutoRefresh();
   } catch (err) {
     state.failCount += 1;
     state.pin = "";
@@ -206,7 +306,7 @@ function handleAction(ev) {
     case "pin-back": ev.preventDefault(); state.pin = state.pin.slice(0, -1); state.pinError = ""; paint(); break;
     case "pin-ok": ev.preventDefault(); unlockFlow(); break;
     case "toggle-remember": state.remember = t.checked; break;
-    case "lock": ev.preventDefault(); lockSession(); state.unlocked = false; state.pin = ""; state.data = emptyData(); paint(); break;
+    case "lock": ev.preventDefault(); stopAutoRefresh(); lockSession(); clearDataCache(); state.unlocked = false; state.pin = ""; state.data = emptyData(); paint(); break;
     case "nav": /* hash change handles it */ break;
     case "rota-week": ev.preventDefault(); state.weekMonday = t.dataset.monday; paint(); break;
     case "kit-tab": ev.preventDefault(); state.kitTab = t.dataset.tab; location.hash = `#/kit/${state.kitTab}`; paint(); break;
@@ -282,7 +382,7 @@ async function savePlan() {
   const by = getActor();
   const at = londonNowIso();
   try {
-    await commitFile(FILES.feed, "Update rota (Plan rota, web)", (json, text) => {
+    await saveFile(FILES.feed, "Update rota (Plan rota, web)", (json, text) => {
       const root = json || { updates: [], staff: [], rotas: [] };
       return applyRotaEditsToFeed(root, edits, by, at);
     }, { rotaWrite: true });
@@ -298,7 +398,7 @@ async function fixRepair(id) {
   const by = getActor();
   const at = londonNowIso();
   try {
-    await commitFile(FILES.repairs, "Mark repair fixed (web)", (json) => {
+    await saveFile(FILES.repairs, "Mark repair fixed (web)", (json) => {
       const list = markFixed((json && json.repairs) || state.data.repairs, id, at, by);
       return repairsToJson(list);
     });
@@ -312,7 +412,7 @@ async function fixRepair(id) {
 async function changeStaffActive(id, name, active) {
   const key = id || name;
   try {
-    await commitFile(FILES.staff, active ? "Restore staff (web)" : "Remove staff (web)", (json) =>
+    await saveFile(FILES.staff, active ? "Restore staff (web)" : "Remove staff (web)", (json) =>
       setStaffActive(json || { staff: [] }, key, active));
     toast(active ? `${name} restored.` : `${name} hidden from the current rota.`);
     await refresh();
@@ -326,7 +426,7 @@ async function changePartCount(id, delta) {
   if (!part) return;
   const qty = Math.max(0, (part.qty || 0) + delta);
   try {
-    await commitFile(FILES.stockCounts, "Update stock count (web)", (json) =>
+    await saveFile(FILES.stockCounts, "Update stock count (web)", (json) =>
       upsertStockCount(json || { counts: [] }, { id, qty, countedAt: londonNowIso(), countedBy: getActor() }));
     await refresh();
   } catch (err) {
@@ -346,7 +446,7 @@ function handleSubmit(ev) {
       state.unlocked = true;
       state.pin = "";
       paint();
-      refresh();
+      refresh().then(() => startAutoRefresh());
     } catch (err) {
       state.pinError = err.message || "Could not connect.";
       paint();
@@ -382,7 +482,7 @@ async function saveRepair(fd) {
     fixedBy: "",
   };
   try {
-    await commitFile(FILES.repairs, "Log repair (web)", (json) => {
+    await saveFile(FILES.repairs, "Log repair (web)", (json) => {
       const list = addRepair((json && json.repairs) || state.data.repairs, repair);
       return repairsToJson(list);
     });
@@ -410,7 +510,7 @@ async function saveRegister(fd) {
     status: "ok",
   };
   try {
-    await commitFile(FILES.items, "Register item (web)", (json) => appendItem(json || { items: [] }, item));
+    await saveFile(FILES.items, "Register item (web)", (json) => appendItem(json || { items: [] }, item));
     state.modal = null;
     state.notice = null;
     toast(`${titleItem(item)} registered.`);
@@ -456,7 +556,7 @@ async function saveAssign(fd) {
     items: [{ barcode: item.barcode, type: item.type, number: item.number, name: item.name }],
   };
   try {
-    await commitFile(FILES.checkouts, "Assign kit (web)", (json, text) => {
+    await saveFile(FILES.checkouts, "Assign kit (web)", (json, text) => {
       const fresh = json || { checkouts: [] };
       const recs = (fresh.checkouts || fresh.records || []);
       // Re-check against the freshly fetched file.
@@ -490,7 +590,7 @@ async function saveStaff(fd) {
     addedBy: getActor(),
   };
   try {
-    await commitFile(FILES.staff, "Add staff (web)", (json) => upsertStaff(json || { staff: [] }, member));
+    await saveFile(FILES.staff, "Add staff (web)", (json) => upsertStaff(json || { staff: [] }, member));
     state.modal = null;
     toast(`${name} added.`);
     await refresh();
@@ -561,11 +661,16 @@ async function start() {
   routeFromHash();
   state.unlocked = isUnlocked();
   paint();
-  if (state.unlocked) await refresh();
-  else await loadVault().catch(() => {});
+  if (state.unlocked) {
+    await refresh();
+    startAutoRefresh();
+  } else {
+    await loadVault().catch(() => {});
+  }
 }
 
 window.addEventListener("hashchange", () => { routeFromHash(); paint(); });
+document.addEventListener("visibilitychange", onVisibility);
 document.addEventListener("click", handleAction);
 document.addEventListener("submit", handleSubmit);
 document.addEventListener("keydown", onKeydown);
