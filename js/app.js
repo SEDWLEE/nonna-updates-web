@@ -39,7 +39,10 @@ const state = {
   search: "",
   notice: null,
   selectedBike: null,
+  selectedBattery: null,
   selectedDay: null,
+  attentionOpen: false,
+  insightsOpen: false,
   weekMonday: mondayOf(londonToday()),
   planMonday: mondayOf(londonToday()),
   planGrid: null,
@@ -314,7 +317,12 @@ function handleAction(ev) {
     case "cal-day": ev.preventDefault(); state.selectedDay = t.dataset.date; paint(); break;
     case "fleet-tab": ev.preventDefault(); state.fleetTab = t.dataset.tab; paint(); break;
     case "fleet-filter": ev.preventDefault(); toggleFilter(t.dataset.filter); paint(); break;
-    case "open-bike": ev.preventDefault(); state.selectedBike = t.dataset.id; state.page = "fleet"; paint(); break;
+    case "open-bike": ev.preventDefault(); state.selectedBike = t.dataset.id; state.page = "fleet"; state.fleetTab = "bikes"; paint(); break;
+    case "open-battery": ev.preventDefault(); state.selectedBattery = t.dataset.id; state.page = "fleet"; state.fleetTab = "batteries"; paint(); break;
+    case "attention-more": ev.preventDefault(); state.attentionOpen = !state.attentionOpen; paint(); break;
+    case "insights-open": ev.preventDefault(); state.insightsOpen = !state.insightsOpen; paint(); break;
+    case "focus-search": ev.preventDefault(); document.querySelector("input[name=q]")?.focus(); break;
+    case "plan-copy-last": ev.preventDefault(); copyLastWeek(); break;
     case "log-repair": ev.preventDefault(); openRepair(t.dataset.id); break;
     case "close-modal": ev.preventDefault(); state.modal = null; paint(); break;
     case "open-register": ev.preventDefault(); state.modal = { type: "register", barcode: state.notice?.barcode || "", unregistered: Boolean(state.notice?.barcode), kind: "bike" }; paint(); break;
@@ -370,6 +378,17 @@ function applyContracted() {
   state.planGrid = contractedGrid(rows, current);
   paint();
 }
+
+function copyLastWeek() {
+  const monday = state.planMonday;
+  const prev = addDays(monday, -7);
+  const prevRota = (state.data.rotas || []).find((r) => r.weekStarting === prev);
+  if (!prevRota) { toast("No rota found for last week."); return; }
+  const rows = planRows(state.data.staff, prevRota);
+  state.planGrid = planGrid(prevRota, rows);
+  paint();
+}
+
 
 async function savePlan() {
   const monday = state.planMonday;
