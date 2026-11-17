@@ -7,7 +7,7 @@ import {
   cyclePlanStatus, effectiveStaff, heldByOther, holidayPlanStatus, itemForBarcode,
   itemForBike, mergeBikeDetails, mergeStock, newRepairId, addRepair, markFixed,
   nextNumber, planChanges, planGrid, planRows, repairsToJson, requireFree,
-  setStaffActive, slugName, titleItem, upsertStaff, upsertStockCount,
+  setStaffActive, slugName, tapFilter, titleItem, upsertStaff, upsertStockCount,
 } from "./logic.js";
 import {
   parseBikeDetails, parseCheckouts, parseFeed, parseFleet, parseItems, parseOptimo,
@@ -32,14 +32,20 @@ const state = {
   failCount: 0,
   actor: getActor(),
   page: "home",
-  kitTab: "history",
+  kitTab: "bikes",
   fleetTab: "bikes",
   adminTab: "staff",
   fleetFilters: [],
+  bikeFilter: "all",
+  batFilter: "all",
+  partsFilter: "parts",
   search: "",
   notice: null,
   selectedBike: null,
   selectedBattery: null,
+  selectedProfile: null,
+  profileTab: "kit",
+  profileShowAllKit: false,
   selectedDay: null,
   attentionOpen: false,
   insightsOpen: false,
@@ -72,8 +78,12 @@ function routeFromHash() {
   const [page, sub] = h.split("/");
   const allowed = new Set(["home", "rota", "kit", "fleet", "admin"]);
   state.page = allowed.has(page) ? page : "home";
-  if (state.page === "kit" && sub) state.kitTab = ["history", "inventory", "parts"].includes(sub) ? sub : state.kitTab;
-  if (state.page === "fleet" && sub === "batteries") state.fleetTab = "batteries";
+  if (state.page === "fleet") {
+    state.page = "kit";
+    state.kitTab = sub === "batteries" ? "batteries" : "bikes";
+  } else if (state.page === "kit" && sub && ["history", "bikes", "batteries", "parts", "inventory"].includes(sub)) {
+    state.kitTab = sub === "inventory" ? "bikes" : sub;
+  }
   if (state.page === "admin" && sub) state.adminTab = sub === "rota" ? "rota" : "staff";
 }
 
@@ -85,7 +95,8 @@ let writing = false;
 function snapshotScroll() {
   const content = document.querySelector(".content");
   const side = document.querySelector(".side-panel");
-  return { content: content ? content.scrollTop : 0, side: side ? side.scrollTop : 0 };
+  const profile = document.querySelector(".profile-panel");
+  return { content: content ? content.scrollTop : 0, side: side ? side.scrollTop : 0, profile: profile ? profile.scrollTop : 0 };
 }
 
 function restoreScroll(s) {
@@ -94,6 +105,8 @@ function restoreScroll(s) {
   const side = document.querySelector(".side-panel");
   if (content) content.scrollTop = s.content;
   if (side) side.scrollTop = s.side;
+  const profile = document.querySelector(".profile-panel");
+  if (profile && s.profile != null) profile.scrollTop = s.profile;
 }
 
 function interactionBusy() {
@@ -110,6 +123,8 @@ function paint(opts = {}) {
   const scroll = opts.preserveScroll ? snapshotScroll() : null;
   const pinInputFocused = document.activeElement && document.activeElement.id === "pin-input";
   const pinVal = pinInputFocused ? document.activeElement.value : null;
+  const qEl = document.activeElement && document.activeElement.matches?.("input[name=q]") ? document.activeElement : null;
+  const qPos = qEl ? qEl.selectionStart : null;
   root.innerHTML = render(state);
   if (!state.unlocked) {
     const input = document.getElementById("pin-input");
@@ -118,8 +133,15 @@ function paint(opts = {}) {
       input.focus();
       try { input.setSelectionRange(input.value.length, input.value.length); } catch { /* ignore */ }
     }
-  } else if (scroll) {
-    restoreScroll(scroll);
+  } else {
+    if (scroll) restoreScroll(scroll);
+    if (qEl) {
+      const nq = document.querySelector("input[name=q]");
+      if (nq) {
+        nq.focus();
+        try { nq.setSelectionRange(qPos, qPos); } catch { /* ignore */ }
+      }
+    }
   }
 }
 
@@ -303,6 +325,7 @@ function handleAction(ev) {
   if (!t) return;
   const action = t.getAttribute("data-action");
   if (action === "close-modal" && ev.target.closest(".modal") && ev.target !== t) return;
+  if (action === "close-profile" && ev.target.closest(".profile-panel") && ev.target !== t) return;
 
   switch (action) {
     case "pin-digit": ev.preventDefault(); addDigit(t.dataset.digit); break;
@@ -313,12 +336,30 @@ function handleAction(ev) {
     case "nav": /* hash change handles it */ break;
     case "rota-week": ev.preventDefault(); state.weekMonday = t.dataset.monday; paint(); break;
     case "kit-tab": ev.preventDefault(); state.kitTab = t.dataset.tab; location.hash = `#/kit/${state.kitTab}`; paint(); break;
+    case "kit-history": ev.preventDefault();
+      if (state.kitTab === "history") {
+        state.kitTab = state.kitListTab || "bikes";
+      } else {
+        state.kitListTab = state.kitTab || "bikes";
+        state.kitTab = "history";
+      }
+      location.hash = `#/kit/${state.kitTab}`;
+      paint();
+      break;
     case "kit-month": ev.preventDefault(); state.kitMonth = { y: +t.dataset.y, m: +t.dataset.m }; paint(); break;
     case "cal-day": ev.preventDefault(); state.selectedDay = t.dataset.date; paint(); break;
-    case "fleet-tab": ev.preventDefault(); state.fleetTab = t.dataset.tab; paint(); break;
-    case "fleet-filter": ev.preventDefault(); toggleFilter(t.dataset.filter); paint(); break;
-    case "open-bike": ev.preventDefault(); state.selectedBike = t.dataset.id; state.page = "fleet"; state.fleetTab = "bikes"; paint(); break;
-    case "open-battery": ev.preventDefault(); state.selectedBattery = t.dataset.id; state.page = "fleet"; state.fleetTab = "batteries"; paint(); break;
+    case "fleet-tab": ev.preventDefault(); state.kitTab = t.dataset.tab; location.hash = `#/kit/${state.kitTab}`; paint(); break;
+    case "fleet-filter":
+    case "kit-filter": ev.preventDefault(); toggleFilter(t.dataset.filter); paint(); break;
+    case "open-bike": ev.preventDefault(); state.selectedBike = t.dataset.id; state.page = "kit"; state.kitTab = "bikes"; location.hash = "#/kit/bikes"; paint(); break;
+    case "open-battery": ev.preventDefault(); state.selectedBattery = t.dataset.id; state.page = "kit"; state.kitTab = "batteries"; location.hash = "#/kit/batteries"; paint(); break;
+    case "close-detail": ev.preventDefault(); state.selectedBike = null; state.selectedBattery = null; paint(); break;
+    case "open-profile": ev.preventDefault(); state.selectedProfile = { id: t.dataset.id || "", name: t.dataset.name || "" }; state.profileTab = "kit"; state.profileShowAllKit = false; paint(); break;
+    case "close-profile": ev.preventDefault(); if (ev.target.closest(".profile-panel") && ev.target !== t) break; state.selectedProfile = null; paint(); break;
+    case "profile-tab": ev.preventDefault(); state.profileTab = t.dataset.tab; paint(); break;
+    case "profile-kit-more": ev.preventDefault(); state.profileShowAllKit = !state.profileShowAllKit; paint(); break;
+    case "profile-open-rota": ev.preventDefault(); state.selectedProfile = null; state.page = "rota"; location.hash = "#/rota"; paint(); break;
+    case "profile-open-history": ev.preventDefault(); state.selectedProfile = null; state.kitListTab = state.kitTab || "bikes"; state.kitTab = "history"; state.page = "kit"; location.hash = "#/kit/history"; paint(); break;
     case "attention-more": ev.preventDefault(); state.attentionOpen = !state.attentionOpen; paint(); break;
     case "insights-open": ev.preventDefault(); state.insightsOpen = !state.insightsOpen; paint(); break;
     case "focus-search": ev.preventDefault(); document.querySelector("input[name=q]")?.focus(); break;
@@ -342,10 +383,10 @@ function handleAction(ev) {
 }
 
 function toggleFilter(key) {
-  if (key === "all") { state.fleetFilters = []; return; }
-  const set = new Set(state.fleetFilters);
-  if (set.has(key)) set.delete(key); else set.add(key);
-  state.fleetFilters = [...set];
+  const tab = state.kitTab || "bikes";
+  if (tab === "batteries") state.batFilter = tapFilter(state.batFilter || "all", key, "all");
+  else if (tab === "parts") state.partsFilter = tapFilter(state.partsFilter || "parts", key, "parts");
+  else state.bikeFilter = tapFilter(state.bikeFilter || "all", key, "all");
 }
 
 function openRepair(bikeId) {
@@ -625,14 +666,24 @@ function handleSearch(raw) {
   const bike = bikeForBarcode(state.data.fleet, state.data.items, code);
   if (bike) {
     state.notice = null;
-    state.page = "fleet";
-    state.fleetTab = "bikes";
+    state.page = "kit";
+    state.kitTab = "bikes";
     state.selectedBike = bike.id;
-    location.hash = "#/fleet";
+    location.hash = "#/kit/bikes";
     paint();
     return;
   }
   if (item) {
+    const kind = (item.kind || "").includes("batter") || (item.type || "").toLowerCase().includes("batter") ? "batteries" : "bikes";
+    if (item.kind === "battery" || /batter/i.test(item.type || "")) {
+      state.notice = null;
+      state.page = "kit";
+      state.kitTab = "batteries";
+      state.selectedBattery = item.id;
+      location.hash = "#/kit/batteries";
+      paint();
+      return;
+    }
     state.notice = { title: titleItem(item), detail: "Registered. Assign it to a rider?", barcode: code, action: "assign-open", actionLabel: "Assign" };
     paint();
     return;
@@ -645,6 +696,13 @@ function handleSearch(raw) {
     actionLabel: "Register item",
   };
   paint();
+}
+
+function onSearchInput(ev) {
+  const el = ev.target;
+  if (!el || !el.matches?.("input[name=q]")) return;
+  state.search = el.value;
+  paint({ preserveScroll: true });
 }
 
 function onKeydown(ev) {
@@ -691,6 +749,7 @@ async function start() {
 window.addEventListener("hashchange", () => { routeFromHash(); paint(); });
 document.addEventListener("visibilitychange", onVisibility);
 document.addEventListener("click", handleAction);
+document.addEventListener("input", onSearchInput);
 document.addEventListener("submit", handleSubmit);
 document.addEventListener("keydown", onKeydown);
 document.addEventListener("contextmenu", onContextMenu);

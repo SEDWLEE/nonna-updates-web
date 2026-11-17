@@ -2,7 +2,7 @@
 
 import { WHATSAPP_NUMBER } from "./config.js";
 import {
-  addDays, formatClock, formatShort, formatWeekLabel, londonToday, mondayOf, sortKey,
+  addDays, currentPeriod, formatClock, formatShort, formatWeekLabel, londonToday, mondayOf, sortKey,
 } from "./date.js";
 import { itemKind, normaliseBarcode, sameBarcode } from "./parse.js";
 
@@ -282,6 +282,23 @@ export function displayCount(n) {
   return n == null ? "—" : String(n);
 }
 
+/** v1.4.4 (Sam via Optimo): each extra drop is worth £2. Worked out here (extra × 2), no new data field. */
+export const POUNDS_PER_EXTRA = 2;
+
+/** Optimo's rule, for reference only — the site never applies it (Optimo sends extras already counted). */
+export const THRESHOLD_DROPS = 80;
+
+export function pounds(extra) {
+  if (extra == null) return "—";
+  return "£" + Math.round(Number(extra) * POUNDS_PER_EXTRA).toLocaleString("en-GB");
+}
+
+/** 14 → "14 extra · £28" */
+export function extraWithValue(extra) {
+  if (extra == null) return "—";
+  return `${extra} extra · ${pounds(extra)}`;
+}
+
 export function whatsAppMessage(riders, week, today = londonToday()) {
   const label = week?.label || formatWeekLabel(week?.start || mondayOf(today));
   const rows = (riders || []).map((r) => ({
@@ -290,7 +307,7 @@ export function whatsAppMessage(riders, week, today = londonToday()) {
   })).filter((r) => r.week != null && r.week > 0)
     .sort((a, b) => b.week - a.week || a.name.localeCompare(b.name, "en", { sensitivity: "base" }));
   if (!rows.length) return "";
-  return [`Extra drops ${label}`, ...rows.map((r) => `${r.name} ${r.week}`)].join("\n");
+  return [`Extra drops ${label}`, ...rows.map((r) => `${r.name} ${extraWithValue(r.week)}`)].join("\n");
 }
 
 export function whatsAppUrl(riders, week, today = londonToday()) {
@@ -702,3 +719,223 @@ export function nextNumber(items, kind) {
 }
 
 export { formatShort };
+
+/** Single-select chips: tapping the selected one (or the total) shows everything again. */
+export function tapFilter(selected, tapped, all = "all") {
+  return (tapped === selected || tapped === all) ? all : tapped;
+}
+
+export function kitBikeRow(bike, item, repairs, holder) {
+  const st = bikeDisplayStatus(bike, item, repairs);
+  let status = "At base";
+  let tone = "g";
+  if (st.key === "off_road") { status = "Off the road"; tone = "r"; }
+  else if (st.key === "needs_repair") { status = "Needs repair"; tone = "a"; }
+  else if (holder) { status = `With ${holder.riderName}`; tone = "g"; }
+  return {
+    id: bike.id,
+    title: bike.name || titleItem(item) || bike.id,
+    status,
+    tone,
+    key: st.key,
+    holder,
+    item,
+    bike,
+    st,
+  };
+}
+
+export function kitBatteryRow(item, holder) {
+  const broken = item.broken || item.outOfService || item.status === "broken";
+  const out = Boolean(holder) && !broken;
+  let status = "At base";
+  let tone = "g";
+  let key = "at_base";
+  if (broken) { status = "Broken"; tone = "r"; key = "broken"; }
+  else if (out) { status = holder.riderName ? `With ${holder.riderName}` : "Out today"; tone = "a"; key = "out_today"; }
+  return { id: item.id, title: titleItem(item), status, tone, key, holder, item };
+}
+
+export function bikeChips(rows) {
+  const all = rows.length;
+  const on = rows.filter((r) => r.key === "on_road").length;
+  const repair = rows.filter((r) => r.key === "needs_repair").length;
+  const off = rows.filter((r) => r.key === "off_road").length;
+  const out = rows.filter((r) => r.key === "on_road" && r.holder).length;
+  return [
+    { filter: "all", count: all, word: all === 1 ? "bike" : "bikes", tone: "n" },
+    { filter: "on_road", count: on, word: out > 0 ? `OK · ${out} out` : "OK", tone: "g" },
+    { filter: "needs_repair", count: repair, word: "repair", tone: "a" },
+    { filter: "off_road", count: off, word: "off road", tone: "r" },
+  ];
+}
+
+export function batteryChips(rows) {
+  const all = rows.length;
+  const out = rows.filter((r) => r.key === "out_today").length;
+  const base = rows.filter((r) => r.key === "at_base").length;
+  const broken = rows.filter((r) => r.key === "broken").length;
+  const chips = [
+    { filter: "all", count: all, word: all === 1 ? "battery" : "batteries", tone: "n" },
+  ];
+  if (out > 0) chips.push({ filter: "out_today", count: out, word: "out", tone: "a" });
+  chips.push(
+    { filter: "at_base", count: base, word: "at base", tone: "g" },
+    { filter: "broken", count: broken, word: "broken", tone: "r" },
+  );
+  return chips;
+}
+
+export function chipText(c) {
+  return c.count < 0 ? c.word : `${c.count} ${c.word}`;
+}
+
+export function stockAppliesTo(part, brand) {
+  const b = String(brand || "").toLowerCase();
+  const applies = String(part.appliesTo || part.raw?.appliesTo || part.raw?.brakes || part.raw?.brand || "").toLowerCase();
+  if (applies) return applies === b;
+  const blob = `${part.name || ""} ${part.sku || ""} ${part.notes || ""}`.toLowerCase();
+  return blob.includes(b);
+}
+
+function normPerson(s) {
+  return String(s || "").trim().toLowerCase().replace(/\./g, "").replace(/\s+/g, " ");
+}
+
+export function findStaff(ref, staff) {
+  const list = staff || [];
+  const id = ref?.id || ref?.staffId;
+  if (id) {
+    const byId = list.find((s) => s.id === id);
+    if (byId) return byId;
+  }
+  const name = normPerson(ref?.name);
+  if (!name) return null;
+  const exact = list.find((s) => normPerson(s.name) === name);
+  if (exact) return exact;
+  const first = name.split(" ")[0];
+  const matches = list.filter((s) => firstName(s.name).toLowerCase() === first);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+export function matchOptimoRider(riders, staffId, name, staff) {
+  const list = riders || [];
+  if (staffId) {
+    const byId = list.find((r) => r.id && r.id === staffId);
+    if (byId) return byId;
+  }
+  const want = normPerson(name);
+  const exact = list.find((r) => normPerson(r.name) === want);
+  if (exact) return exact;
+  const member = findStaff({ id: staffId, name }, staff);
+  if (member) {
+    const byMember = list.find((r) => (r.id && r.id === member.id) || normPerson(r.name) === normPerson(member.name));
+    if (byMember) return byMember;
+  }
+  return null;
+}
+
+export function checkoutsFor(ref, member, checkouts) {
+  const ids = new Set([member?.id, ref?.id, ref?.staffId].filter(Boolean));
+  const names = new Set([normPerson(ref?.name), member ? normPerson(member.name) : ""].filter(Boolean));
+  return (checkouts || []).filter((r) => {
+    if (r.riderId && ids.has(r.riderId)) return true;
+    if ((!r.riderId || !ids.size) && names.has(normPerson(r.riderName))) return true;
+    return false;
+  });
+}
+
+function rotaRider(rota, name) {
+  const want = normPerson(name);
+  return (rota?.riders || []).find((r) => normPerson(r.name) === want)
+    || (rota?.riders || []).find((r) => firstName(r.name).toLowerCase() === want.split(" ")[0]);
+}
+
+export function profileRotaDays(name, rotas) {
+  const out = [];
+  for (const rota of rotas || []) {
+    const rr = rotaRider(rota, name);
+    if (!rr) continue;
+    WEEKDAYS.forEach((d, i) => {
+      const date = rota.dates?.[d] || (rota.weekStarting ? addDays(rota.weekStarting, i) : "");
+      const status = rr.days?.[d] || "none";
+      if (!date || status === "none") return;
+      out.push({ date, day: d, status, weekStarting: rota.weekStarting });
+    });
+  }
+  const seen = new Set();
+  return out.filter((d) => (seen.has(d.date) ? false : (seen.add(d.date), true)))
+    .sort((a, b) => b.date.localeCompare(a.date));
+}
+
+export function buildProfile(ref, staff, checkouts, rotas, today = londonToday()) {
+  const member = findStaff(ref, staff);
+  const name = member?.name || String(ref?.name || "").trim();
+  const mine = checkoutsFor(ref, member, checkouts);
+  const byDate = new Map();
+  for (const rec of mine) {
+    if (!rec.date) continue;
+    if (!byDate.has(rec.date)) byDate.set(rec.date, []);
+    byDate.get(rec.date).push(rec);
+  }
+  const kitDays = [...byDate.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+  const rDays = profileRotaDays(name, rotas);
+  const onRota = rDays.length > 0 || (rotas || []).some((r) => rotaRider(r, name));
+  const worked = rDays.filter((d) => d.status === "working" && d.date <= today);
+  const bikeDays = new Map();
+  for (const rec of mine) {
+    for (const it of rec.items || []) {
+      if (itemKind(it.type) !== "bike") continue;
+      const label = titleItem(it) || it.name || "Bike";
+      if (!bikeDays.has(label)) bikeDays.set(label, new Set());
+      if (rec.date) bikeDays.get(label).add(rec.date);
+    }
+  }
+  let topBike = null;
+  for (const [label, days] of bikeDays) {
+    if (!topBike || days.size > topBike.days || (days.size === topBike.days && [...days].sort().at(-1) > [...(topBike.set || [])].sort().at(-1))) {
+      topBike = { label, days: days.size, set: days };
+    }
+  }
+  const lastKit = kitDays[0]?.[0] || null;
+  const lastWorked = worked[0]?.date || null;
+  const lastActive = [lastKit, lastWorked].filter(Boolean).sort().at(-1) || null;
+  const distinct = new Set();
+  for (const rec of mine) {
+    for (const it of rec.items || []) {
+      const k = normaliseBarcode(it.barcode).toUpperCase() || titleItem(it);
+      if (k) distinct.add(k);
+    }
+  }
+  const asNeeded = /as needed/i.test(member?.role || "") || (member?.days || []).length === 0 || member?.asNeeded;
+  const roleLine = member ? [
+    member.role || "Rider",
+    asNeeded && !/as needed/i.test(member.role || "") ? "as needed" : null,
+    daysLabel(member.days) || null,
+    member.location || null,
+  ].filter(Boolean).join(" · ") : null;
+
+  const period = currentPeriod(today);
+  const inPeriod = rDays.filter((d) => d.date >= period.start && d.date < period.end);
+  const rostered = inPeriod.filter((d) => d.status === "working").length;
+  const workedPeriod = inPeriod.filter((d) => d.status === "working" && d.date <= today).length;
+
+  return {
+    name,
+    member,
+    roleLine,
+    kitDays,
+    rotaDays: rDays,
+    onRota,
+    todayKit: (kitDays.find(([d]) => d === today) || [today, []])[1],
+    summary: {
+      daysWithKit: kitDays.length,
+      checkouts: mine.length,
+      distinctItems: distinct.size,
+      lastKitDate: lastKit,
+      lastActive,
+      topBike: topBike ? { label: topBike.label, days: topBike.days } : null,
+      workedPeriod: onRota && inPeriod.length ? { worked: workedPeriod, rostered } : null,
+    },
+  };
+}

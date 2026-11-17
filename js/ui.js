@@ -6,11 +6,13 @@ import {
   formatWeekLabel, mondayIndex, mondayOf, monthGrid, monthName, parseYmd,
 } from "./date.js";
 import {
-  WEEKDAYS, assignmentHistory, attentionItems, bikeDisplayStatus, currentKitByRider,
-  daysLabel, displayCount, extraPeriod, extraToday, extraWeek, forDisplay, historyRepairs,
-  holderForItem, inventorySummary, itemForBike, kitLines, needsRepairBike, nextNumber,
-  openRepairs, planChanges, planGrid, planRows, removedStaff, repairsForBike, riderDays,
-  titleItem, visibleRota, whatsAppUrl,
+  WEEKDAYS, assignmentHistory, attentionItems, batteryChips, bikeChips, bikeDisplayStatus,
+  buildProfile, chipText, currentKitByRider, daysLabel, displayCount, extraPeriod,
+  extraToday, extraWeek, extraWithValue, forDisplay, historyRepairs, holderForItem,
+  inventorySummary, itemForBike, kitBatteryRow, kitBikeRow, kitLines, matchOptimoRider,
+  needsRepairBike, nextNumber, openRepairs, planChanges, planGrid, planRows, pounds,
+  removedStaff, repairsForBike, riderDays, stockAppliesTo, titleItem, visibleRota,
+  whatsAppUrl,
 } from "./logic.js";
 
 export function esc(s) {
@@ -162,7 +164,7 @@ function renderPin(state) {
 }
 
 function renderShell(state) {
-  const page = state.page || "home";
+  const page = state.page === "fleet" ? "kit" : (state.page || "home");
   const navItem = (id, label, icon) =>
     `<a href="#/${id}" class="${page === id ? "on" : ""}" data-action="nav" data-page="${id}">${ic(icon, 18)}${label}</a>`;
   const actor = state.actor || "Sam";
@@ -183,7 +185,6 @@ function renderShell(state) {
           ${navItem("home", "Home", "home")}
           ${navItem("rota", "Rota", "cal")}
           ${navItem("kit", "Kit", "box")}
-          ${navItem("fleet", "Fleet", "bike")}
           <div class="div"></div>
           ${navItem("admin", "Admin", "gear")}
         </nav>
@@ -202,29 +203,28 @@ function renderShell(state) {
       ${navItem("home", "Home", "home")}
       ${navItem("rota", "Rota", "cal")}
       ${navItem("kit", "Kit", "box")}
-      ${navItem("fleet", "Fleet", "bike")}
       ${navItem("admin", "Admin", "gear")}
     </nav>
     ${state.modal ? renderModal(state) : ""}
+    ${state.selectedProfile ? renderProfile(state) : ""}
     ${state.toast ? `<div class="toast" role="status">${esc(state.toast)}</div>` : ""}
   </div>`;
 }
 
 function renderTop(state) {
-  const page = state.page || "home";
-  const titles = { home: "Home", rota: "Weekly Rota", kit: "Kit", fleet: "Fleet", admin: "Admin" };
+  const page = state.page === "fleet" ? "kit" : (state.page || "home");
+  const onHistory = page === "kit" && (state.kitTab || "bikes") === "history";
+  const titles = { home: "Home", rota: "Weekly Rota", kit: onHistory ? "History" : "Kit", admin: "Admin" };
   const subs = {
     home: formatWeekdayLong(state.today),
     rota: rotaSubtitle(state),
-    kit: "History, inventory and parts",
-    fleet: fleetSubtitle(state),
+    kit: kitSubtitle(state),
     admin: "Manage staff and plan the rota",
   };
   let extra = "";
   if (page === "home") extra = searchBox(state, "Scan a bike or battery") + outPill(state);
   else if (page === "rota") extra = weekNav(state.weekMonday, state.today, "rota-week");
-  else if (page === "kit") extra = outPill(state);
-  else if (page === "fleet") extra = outPill(state);
+  else if (page === "kit") extra = `<button type="button" class="hist-link" data-action="kit-history">${onHistory ? "Back to kit" : "History"}</button>`;
   return `
   <div class="top">
     <div>
@@ -234,6 +234,12 @@ function renderTop(state) {
     </div>
     <div class="top-right">${extra}</div>
   </div>`;
+}
+
+function kitSubtitle(state) {
+  const dow = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][mondayIndex(state.today)];
+  const n = state.outToday != null ? state.outToday : 0;
+  return `${dow} ${formatShort(state.today)} · ${n} out today`;
 }
 
 function rotaSubtitle(state) {
@@ -268,8 +274,8 @@ function renderPage(state) {
   if (state.loadError) return `<div class="error">${esc(state.loadError)}</div>`;
   switch (state.page) {
     case "rota": return renderRota(state);
-    case "kit": return renderKit(state);
-    case "fleet": return renderFleet(state);
+    case "kit":
+    case "fleet": return renderKit(state);
     case "admin": return renderAdmin(state);
     default: return renderHome(state);
   }
@@ -296,7 +302,7 @@ function renderHome(state) {
   const teamRows = team.map((row) => {
     const has = row.kit.length > 0;
     const tag = has ? `<span class="today-tag"><i></i>Today</span>` : "";
-    return `<div class="row">
+    return `<div class="row clickable" data-action="open-profile" data-id="${esc(row.staff.id)}" data-name="${esc(row.staff.name)}" role="button">
       <div class="av ${avClass(row.staff.name)}">${initials(row.staff.name)}</div>
       <div class="grow">
         <b class="who">${esc(row.staff.name)}</b>
@@ -317,11 +323,11 @@ function renderHome(state) {
 
   const breakdown = state.insightsOpen ? `<div class="breakdown">
     <div class="row"><div class="grow muted small">Rider</div><span class="muted small">Today</span><span class="muted small">Week</span><span class="muted small">Period</span></div>
-    ${riders.map((r) => `<div class="row">
+    ${riders.map((r) => `<div class="row clickable" data-action="open-profile" data-id="${esc(r.id || "")}" data-name="${esc(r.name)}" role="button">
       <div class="grow"><b class="who" style="font-size:14px">${esc(r.name)}</b></div>
-      <span class="muted">${esc(displayCount(extraToday(r, today)))}</span>
-      <span>${esc(displayCount(extraWeek(r, week)))}</span>
-      <span class="muted">${esc(displayCount(extraPeriod(r)))}</span>
+      <span class="muted">${esc(extraToday(r, today) == null ? "—" : extraWithValue(extraToday(r, today)))}</span>
+      <span>${esc(extraWeek(r, week) == null ? "—" : extraWithValue(extraWeek(r, week)))}</span>
+      <span class="muted">${esc(extraPeriod(r) == null ? "—" : extraWithValue(extraPeriod(r)))}</span>
     </div>`).join("") || `<p class="muted">No extra drops data yet.</p>`}
   </div>` : "";
 
@@ -351,14 +357,14 @@ function renderHome(state) {
             <div>
               <div class="cap">Extra drops</div>
               <div class="big">${esc(displayCount(periodSum ?? weekSum ?? todaySum))}</div>
-              <div class="small muted" style="margin-top:3px">${esc(periodLabel)}</div>
+              <div class="small muted" style="margin-top:3px">${periodSum != null || weekSum != null || todaySum != null ? esc(extraWithValue(periodSum ?? weekSum ?? todaySum)) + " · " : ""}${esc(periodLabel)}</div>
             </div>
           </div>
           <div class="cap" style="margin:16px 0 8px">Extra drops · ${esc(formatWeekLabel(mondayOf(today)).replace("w/c ", "w/c "))}</div>
           <div class="three">
-            <div class="glass box"><div class="v">${esc(displayCount(todaySum))}</div><div class="l">Today so far</div></div>
-            <div class="glass box"><div class="v">${esc(displayCount(weekSum))}</div><div class="l">This week</div></div>
-            <div class="glass box"><div class="v">${esc(displayCount(periodSum))}</div><div class="l">Period</div></div>
+            <div class="glass box"><div class="v">${esc(displayCount(todaySum))}</div>${todaySum != null ? `<div class="money">${esc(extraWithValue(todaySum))}</div>` : ""}<div class="l">Today so far</div></div>
+            <div class="glass box"><div class="v">${esc(displayCount(weekSum))}</div>${weekSum != null ? `<div class="money">${esc(extraWithValue(weekSum))}</div>` : ""}<div class="l">This week</div></div>
+            <div class="glass box"><div class="v">${esc(displayCount(periodSum))}</div>${periodSum != null ? `<div class="money">${esc(extraWithValue(periodSum))}</div>` : ""}<div class="l">Period</div></div>
           </div>
           <div class="wa">
             ${wa ? `<a class="pill" href="${esc(wa)}" target="_blank" rel="noopener">${ic("send", 16)}WhatsApp</a>` : `<span class="pill mut" aria-disabled="true">${ic("send", 16)}WhatsApp</span>`}
@@ -417,10 +423,10 @@ function renderRota(state) {
       const edited = r.manual?.[d] || r.edited?.[d] || r.source?.[d] === "app" || r.flags?.[d] === "app";
       return `<td><div class="markc ${mark.cls}" style="margin:0 auto">${mark.txt}</div>${edited ? `<i class="dot-edit" title="Changed in the app"></i>` : ""}</td>`;
     }).join("");
-    return `<tr><td class="name">${esc(r.name)}</td>${cells}</tr>`;
+    return `<tr><td class="name"><button type="button" class="name-btn" data-action="open-profile" data-id="${esc(r.id || r.memberId || "")}" data-name="${esc(r.name)}">${esc(r.name)}</button></td>${cells}</tr>`;
   }).join("");
   const reqHtml = requests.length
-    ? requests.map((q) => `<div class="row" style="align-items:flex-start">
+    ? requests.map((q) => `<div class="row clickable" style="align-items:flex-start" data-action="open-profile" data-name="${esc(q.name)}" role="button">
         <div class="av s ${avClass(q.name)}">${initials(q.name)}</div>
         <div class="grow"><b class="who" style="font-size:14.5px">${esc(q.name)}</b>
           <span class="small muted" style="display:block;margin-top:2px">${esc(q.range)}</span></div>
@@ -485,17 +491,152 @@ function holidayRequests(rota, monday) {
 }
 
 function renderKit(state) {
-  const tab = state.kitTab || "history";
+  const tab = state.kitTab || "bikes";
+  if (tab === "history") return renderHistory(state);
   const seg = (id, label) => `<button type="button" class="${tab === id ? "on" : ""}" data-action="kit-tab" data-tab="${id}">${label}</button>`;
   return `
   <div class="toolbar">
-    <div class="seg">${seg("history", "History")}${seg("inventory", "Inventory")}${seg("parts", "Parts")}</div>
-    ${searchBox(state, "Scan or search history, kit or parts")}
+    ${searchBox(state, "Search or scan")}
   </div>
-  ${tab === "inventory" ? renderInventory(state) : tab === "parts" ? renderParts(state) : renderHistory(state)}`;
+  <div class="seg kit-seg">${seg("bikes", "Bikes")}${seg("batteries", "Batteries")}${seg("parts", "Parts")}</div>
+  ${tab === "batteries" ? renderKitBatteries(state) : tab === "parts" ? renderKitParts(state) : renderKitBikes(state)}`;
+}
+
+function matchesQuery(row, q) {
+  if (!q) return true;
+  const s = String(q).trim().toLowerCase();
+  if (!s) return true;
+  return [row.title, row.status, row.id, row.item?.barcode, row.item?.number, row.item?.name, row.bike?.barcode, row.bike?.name]
+    .filter(Boolean).some((v) => String(v).toLowerCase().includes(s));
+}
+
+function renderCountChips(chips, selected) {
+  return `<div class="count-chips">${chips.map((c) =>
+    `<button type="button" class="count-chip t-${c.tone} ${selected === c.filter ? "on" : ""}" data-action="kit-filter" data-filter="${esc(c.filter)}">${c.count < 0 ? esc(c.word) : `<b>${c.count}</b> ${esc(c.word)}`}</button>`
+  ).join("")}</div>`;
+}
+
+function kitRowsHtml(rows, selectedId, action) {
+  if (!rows.length) return `<div class="panel"><div class="row"><p class="muted">Nothing matches.</p></div></div>`;
+  return `<div class="panel kit-list">${rows.map((r) => `
+    <button type="button" class="krow ${selectedId === r.id ? "sel" : ""}"${action ? ` data-action="${action}" data-id="${esc(r.id)}"` : ""}>
+      <i class="dot ${r.tone}"></i>
+      <span class="kname">${esc(r.title)}</span>
+      <span class="kst t-${r.tone}">${esc(r.status)}</span>
+    </button>`).join("")}</div>`;
+}
+
+function renderKitBikes(state) {
+  const d = state.data;
+  const rows = (d.fleet || []).map((b) => {
+    const item = itemForBike(d.items, b);
+    const holder = holderForItem(item, d.checkouts, state.today);
+    return kitBikeRow(b, item, d.repairs, holder);
+  });
+  const chips = bikeChips(rows);
+  const filter = state.bikeFilter || "all";
+  const shown = rows.filter((r) => (filter === "all" || r.key === filter) && matchesQuery(r, state.search));
+  const selected = shown.find((r) => r.id === state.selectedBike) || null;
+  const selectedWrap = selected ? { bike: selected.bike, item: selected.item, st: selected.st, holder: selected.holder } : null;
+  return `
+  ${renderCountChips(chips, filter)}
+  <div class="kit-body ${selected ? "has-sel" : ""}">
+    <div class="list">${kitRowsHtml(shown, selected?.id, "open-bike")}</div>
+    <div class="detail">
+      ${selectedWrap ? `<button type="button" class="sheet-close" data-action="close-detail" aria-label="Close">Close</button>${renderBikePanel(state, selectedWrap)}` : `<section class="panel side-panel"><p class="muted">Select a bike to see repairs and history.</p></section>`}
+    </div>
+  </div>`;
+}
+
+function renderKitBatteries(state) {
+  const d = state.data;
+  const groups = inventorySummary(d.items, d.checkouts, state.today);
+  const rows = (groups.battery || []).filter((b) => !b.retired).map((b) => kitBatteryRow(b, b.holder));
+  const chips = batteryChips(rows);
+  const filter = state.batFilter || "all";
+  const shown = rows.filter((r) => (filter === "all" || r.key === filter) && matchesQuery(r, state.search));
+  const selected = shown.find((r) => r.id === state.selectedBattery) || rows.find((r) => r.id === state.selectedBattery) || null;
+  const selectedItem = selected ? (groups.battery || []).find((b) => b.id === selected.id) : null;
+  return `
+  ${renderCountChips(chips, filter)}
+  <div class="kit-body ${selected ? "has-sel" : ""}">
+    <div class="list">${kitRowsHtml(shown, selected?.id, "open-battery")}</div>
+    <div class="detail">
+      ${selectedItem ? `<button type="button" class="sheet-close" data-action="close-detail" aria-label="Close">Close</button>${renderBatteryPanel(state, selectedItem)}` : `<section class="panel side-panel"><p class="muted">Select a battery to see its history.</p></section>`}
+    </div>
+  </div>`;
+}
+
+function partsChipList(parts, items) {
+  const toOrder = (parts || []).filter((p) => p.reorderAt != null && p.qty <= p.reorderAt).length;
+  const phones = (items || []).filter((i) => !i.retired && i.kind === "phone").length;
+  const other = (items || []).filter((i) => !i.retired && i.kind !== "bike" && i.kind !== "battery" && i.kind !== "phone").length;
+  const retired = (items || []).filter((i) => i.retired).length;
+  const n = (parts || []).length;
+  return [
+    { filter: "parts", count: n, word: n === 1 ? "part" : "parts", tone: "n" },
+    { filter: "to_order", count: toOrder, word: "to order", tone: toOrder > 0 ? "a" : "n" },
+    { filter: "magura", count: -1, word: "Magura", tone: "n" },
+    { filter: "shimano", count: -1, word: "Shimano", tone: "n" },
+    phones ? { filter: "phones", count: phones, word: phones === 1 ? "phone" : "phones", tone: "n" } : null,
+    other ? { filter: "other", count: other, word: "other kit", tone: "n" } : null,
+    retired ? { filter: "retired", count: retired, word: "retired", tone: "n" } : null,
+  ].filter(Boolean);
+}
+
+function kitItemRow(it, holder) {
+  if (it.retired) return { id: it.id, title: titleItem(it), status: "Retired", tone: "n", item: it };
+  if (it.outOfService || it.broken || it.status === "broken") return { id: it.id, title: titleItem(it), status: "Broken", tone: "r", item: it };
+  if (holder) return { id: it.id, title: titleItem(it), status: `With ${holder.riderName}`, tone: "a", item: it, holder };
+  return { id: it.id, title: titleItem(it), status: "At base", tone: "g", item: it };
+}
+
+function renderKitParts(state) {
+  const d = state.data;
+  const parts = d.stock || [];
+  const items = d.items || [];
+  const filter = state.partsFilter || "parts";
+  const chips = partsChipList(parts, items);
+  let body = "";
+  if (filter === "phones" || filter === "other" || filter === "retired") {
+    const list = items.filter((it) => {
+      if (filter === "retired") return it.retired;
+      if (it.retired) return false;
+      if (filter === "phones") return it.kind === "phone";
+      return it.kind !== "bike" && it.kind !== "battery" && it.kind !== "phone";
+    }).map((it) => kitItemRow(it, holderForItem(it, d.checkouts, state.today)))
+      .filter((r) => matchesQuery(r, state.search));
+    body = kitRowsHtml(list, null, "");
+  } else {
+    let shown = parts;
+    if (filter === "to_order") shown = parts.filter((p) => p.reorderAt != null && p.qty <= p.reorderAt);
+    else if (filter === "magura") shown = parts.filter((p) => stockAppliesTo(p, "magura"));
+    else if (filter === "shimano") shown = parts.filter((p) => stockAppliesTo(p, "shimano"));
+    const q = String(state.search || "").trim().toLowerCase();
+    if (q) shown = shown.filter((p) => `${p.name || ""} ${p.sku || ""} ${p.id || ""}`.toLowerCase().includes(q));
+    body = `
+    <section class="panel" style="padding:12px">
+      <div class="parts">
+        ${shown.map((p) => {
+          const low = p.reorderAt != null && p.qty <= p.reorderAt;
+          return `<div class="part ${low ? "low" : ""}">
+            <div><div class="who" style="font-size:14.5px">${esc(p.name)}</div><div class="muted small">${low ? "Low stock" : (p.sku || "")}</div></div>
+            <div class="stepper">
+              <button type="button" data-action="count-part" data-id="${esc(p.id)}" data-delta="-1">−</button>
+              <div class="qty">${esc(p.qty)}</div>
+              <button type="button" data-action="count-part" data-id="${esc(p.id)}" data-delta="1">+</button>
+            </div>
+          </div>`;
+        }).join("") || `<p class="muted">No parts to show.</p>`}
+      </div>
+      <div style="margin-top:12px"><button type="button" class="link" data-action="open-register">Register item</button></div>
+    </section>`;
+  }
+  return `${renderCountChips(chips, filter)}${body}`;
 }
 
 function renderHistory(state) {
+
   const { y, m } = state.kitMonth;
   const today = state.today;
   const cells = monthGrid(y, m);
@@ -523,7 +664,7 @@ function renderHistory(state) {
   }).join("");
   const selected = state.selectedDay || today;
   const list = riderDays(byDate.get(selected) || []).map((rd) => `
-    <div class="row">
+    <div class="row clickable" data-action="open-profile" data-id="${esc(rd.riderId || "")}" data-name="${esc(rd.riderName)}" role="button">
       <div class="av s ${avClass(rd.riderName)}">${initials(rd.riderName)}</div>
       <div class="grow">
         <b class="who" style="font-size:14.5px">${esc(rd.riderName)}</b>
@@ -548,158 +689,6 @@ function renderHistory(state) {
       <div class="sec">${esc(formatWeekdayLong(selected).toUpperCase())} · ${n} assigned</div>
       <div class="panel">${list || `<div class="row"><p class="muted">No checkouts on this day.</p></div>`}</div>
     </div>
-  </div>`;
-}
-
-function renderInventory(state) {
-  const groups = inventorySummary(state.data.items, state.data.checkouts, state.today);
-  const block = (title, list, kind) => `
-    <section class="panel" style="margin-bottom:14px">
-      <div class="sec" style="padding:12px 14px 0"> ${title} · ${list.length}
-        <button type="button" class="link" data-action="open-register">Register item</button>
-      </div>
-      ${list.map((it) => {
-        const st = it.broken ? "Broken" : it.out && it.holder ? `Out · ${it.holder.riderName}` : "At base";
-        return `<div class="row">
-          <div class="av s ${avClass(titleItem(it))}">${ic(iconForKind(kind), 16)}</div>
-          <div class="grow"><b class="who" style="font-size:14.5px">${esc(titleItem(it))}</b>
-            <div class="small muted">${esc(it.barcode || "No barcode")} · ${esc(st)}</div></div>
-        </div>`;
-      }).join("") || `<div class="row"><p class="muted">None registered.</p></div>`}
-    </section>`;
-  return `${block("Bikes", groups.bike, "bike")}${block("Batteries", groups.battery, "battery")}${block("Phones", groups.phone, "phone")}${block("Other", groups.other, "other")}`;
-}
-
-function renderParts(state) {
-  const parts = state.data.stock || [];
-  return `
-  <section class="panel" style="padding:12px">
-    <div class="sec">Parts · ${parts.length}</div>
-    <div class="parts">
-      ${parts.map((p) => {
-        const low = p.reorderAt != null && p.qty <= p.reorderAt;
-        return `<div class="part ${low ? "low" : ""}">
-          <div><div class="who" style="font-size:14.5px">${esc(p.name)}</div><div class="muted small">${low ? "Low stock" : (p.sku || "")}</div></div>
-          <div class="stepper">
-            <button type="button" data-action="count-part" data-id="${esc(p.id)}" data-delta="-1">−</button>
-            <div class="qty">${esc(p.qty)}</div>
-            <button type="button" data-action="count-part" data-id="${esc(p.id)}" data-delta="1">+</button>
-          </div>
-        </div>`;
-      }).join("") || `<p class="muted">No parts list yet.</p>`}
-    </div>
-  </section>`;
-}
-
-function renderFleet(state) {
-  const tab = state.fleetTab || "bikes";
-  const seg = (id, label) => `<button type="button" class="${tab === id ? "on" : ""}" data-action="fleet-tab" data-tab="${id}">${label}</button>`;
-  return `
-  <div class="toolbar">
-    <div class="seg">${seg("bikes", "Bikes")}${seg("batteries", "Batteries")}</div>
-    ${searchBox(state, "Search or scan a bike or battery")}
-  </div>
-  ${tab === "batteries" ? renderBatteries(state) : renderBikes(state)}`;
-}
-
-function renderBikes(state) {
-  const d = state.data;
-  const filters = new Set(state.fleetFilters || []);
-  const bikes = (d.fleet || []).map((b) => {
-    const item = itemForBike(d.items, b);
-    const st = bikeDisplayStatus(b, item, d.repairs);
-    const holder = holderForItem(item, d.checkouts, state.today);
-    const bat = holderBattery(holder);
-    const open = openRepairs(repairsForBike(d.repairs, b, item));
-    return { bike: b, item, st, holder, bat, open };
-  });
-  const counts = {
-    all: bikes.length,
-    on_road: bikes.filter((b) => b.st.key === "on_road").length,
-    needs_repair: bikes.filter((b) => b.st.key === "needs_repair").length,
-    off_road: bikes.filter((b) => b.st.key === "off_road").length,
-  };
-  const shown = bikes.filter((b) => !filters.size || filters.has(b.st.key));
-  const selected = bikes.find((b) => b.bike.id === state.selectedBike) || shown[0] || bikes[0] || null;
-  const kpi = (key, n, label, col) =>
-    `<button type="button" class="kpi ${filters.has(key) || (key === "all" && !filters.size) ? "on" : ""}" data-action="fleet-filter" data-filter="${key}">
-      <div class="bar" style="background:${col}"></div><div class="v">${n}</div><div class="l">${label}</div></button>`;
-
-  const cards = shown.map((b) => {
-    const tone = b.st.key === "off_road" ? "r" : b.st.key === "needs_repair" ? "a" : "g";
-    const who = b.st.key === "off_road" && !b.holder ? "Off the road" : (b.holder ? b.holder.riderName : "At base");
-    const bits = [];
-    if (b.bat) bits.push(`Battery ${b.bat}`);
-    const types = (b.open || []).map((r) => labelType(r.type)).filter(Boolean);
-    if (b.st.key === "needs_repair" && types.length) bits.push(types.join(", "));
-    if (b.st.key === "off_road") {
-      const t = types.length ? types.join(", ") : (b.bike.reason || b.bike.issue || "");
-      if (t) bits.push(t);
-    }
-    return `<button type="button" class="bcard st-${tone} ${selected?.bike.id === b.bike.id ? "sel" : ""}" data-action="open-bike" data-id="${esc(b.bike.id)}">
-      <div class="bnum">${esc(b.bike.name || titleItem(b.item) || b.bike.id)}</div>
-      <div class="bwho">${esc(who)}</div>
-      ${bits.length ? `<div class="bmeta">${esc(bits.join(" · "))}</div>` : ""}
-    </button>`;
-  }).join("");
-
-  return `
-  <div class="fleet-body">
-    <div class="list">
-      <div class="kpis">
-        ${kpi("all", counts.all, "All", "#D5DBE6")}
-        ${kpi("on_road", counts.on_road, "On the road", "var(--g)")}
-        ${kpi("needs_repair", counts.needs_repair, "Needs repair", "var(--a)")}
-        ${kpi("off_road", counts.off_road, "Off the road", "var(--r)")}
-      </div>
-      <div class="bgrid">${cards || `<p class="muted">No bikes match those filters.</p>`}</div>
-    </div>
-    <div class="detail">${selected ? renderBikePanel(state, selected) : `<section class="panel side-panel"><p class="muted">Select a bike to see repairs and history.</p></section>`}</div>
-  </div>`;
-}
-
-function holderBattery(holder) {
-  if (!holder) return "";
-  const bat = (holder.rec?.items || holder.items || []).find((it) => /batter/i.test(it.type || it.kind || it.name || ""));
-  return bat?.number || "";
-}
-
-function holderBike(holder) {
-  if (!holder) return "";
-  const bike = (holder.rec?.items || holder.items || []).find((it) => /bike/i.test(it.type || it.kind || it.name || ""));
-  if (!bike) return "";
-  return bike.number ? `Bike ${bike.number}` : (bike.name || "");
-}
-
-function renderBatteries(state) {
-  const d = state.data;
-  const bats = inventorySummary(d.items, d.checkouts, state.today).battery;
-  const out = bats.filter((b) => b.out && !b.broken).length;
-  const base = bats.filter((b) => !b.out && !b.broken).length;
-  const broken = bats.filter((b) => b.broken).length;
-  const selected = bats.find((b) => b.id === state.selectedBattery) || bats[0] || null;
-  const kpi = (n, label, col) =>
-    `<div class="kpi"><div class="bar" style="background:${col}"></div><div class="v">${n}</div><div class="l">${label}</div></div>`;
-  const cards = bats.map((b) => {
-    const tone = b.broken ? "r" : b.out ? "a" : "g";
-    const who = b.broken ? "Broken" : b.out && b.holder ? b.holder.riderName + (holderBike(b.holder) ? ` · ${holderBike(b.holder)}` : "") : "At base";
-    return `<button type="button" class="bcard st-${tone} ${selected?.id === b.id ? "sel" : ""}" data-action="open-battery" data-id="${esc(b.id)}">
-      <div class="bnum">${esc(titleItem(b))}</div>
-      <div class="bwho">${esc(who)}</div>
-    </button>`;
-  }).join("");
-  return `
-  <div class="fleet-body">
-    <div class="list">
-      <div class="kpis">
-        ${kpi(bats.length, "All", "#D5DBE6")}
-        ${kpi(out, "Out today", "var(--a)")}
-        ${kpi(base, "At base", "var(--g)")}
-        ${kpi(broken, "Broken", "var(--r)")}
-      </div>
-      <div class="bgrid">${cards || `<p class="muted">No batteries registered.</p>`}</div>
-    </div>
-    <div class="detail">${selected ? renderBatteryPanel(state, selected) : `<section class="panel side-panel"><p class="muted">Select a battery to see its history.</p></section>`}</div>
   </div>`;
 }
 
@@ -746,8 +735,9 @@ function renderBikePanel(state, selected) {
     <div class="glass with-now">
       <div class="cap">With now</div>
       ${holder ? `<div style="display:flex;gap:10px;align-items:center">
+        <button type="button" class="person-link" data-action="open-profile" data-name="${esc(holder.riderName)}">
         <div class="av s ${avClass(holder.riderName)}">${initials(holder.riderName)}</div>
-        <b style="font-size:14.5px">${esc(holder.riderName)}</b>
+        <b style="font-size:14.5px">${esc(holder.riderName)}</b></button>
         <span class="muted small">· ${esc(formatShort(state.today))}</span>
       </div>` : `<span class="muted">At base</span>`}
     </div>
@@ -783,8 +773,9 @@ function renderBatteryPanel(state, bat) {
     <div class="glass with-now">
       <div class="cap">With now</div>
       ${bat.holder ? `<div style="display:flex;gap:10px;align-items:center">
+        <button type="button" class="person-link" data-action="open-profile" data-name="${esc(bat.holder.riderName)}">
         <div class="av s ${avClass(bat.holder.riderName)}">${initials(bat.holder.riderName)}</div>
-        <div><b style="font-size:14.5px">${esc(bat.holder.riderName)}</b>
+        <div><b style="font-size:14.5px">${esc(bat.holder.riderName)}</b></button>
           <div class="small muted">${esc(holderBike(bat.holder) || "")}</div></div>
       </div>` : `<span class="muted">At base</span>`}
     </div>
@@ -818,13 +809,13 @@ function staffSource(s) {
 function renderStaff(state) {
   const active = forDisplay(state.data.staff);
   const removed = removedStaff(state.data.staff);
-  const rows = active.map((s) => `<div class="row">
+  const rows = active.map((s) => `<div class="row clickable" data-action="open-profile" data-id="${esc(s.id)}" data-name="${esc(s.name)}" role="button">
     <div class="av ${avClass(s.name)}">${initials(s.name)}</div>
     <div class="grow"><b class="who" style="font-size:15px">${esc(s.name)}</b>
       <div class="small muted" style="margin-top:2px">${esc(staffSource(s))}</div></div>
     <button type="button" class="icon-btn" data-action="staff-remove" data-id="${esc(s.id)}" data-name="${esc(s.name)}" aria-label="Remove ${esc(s.name)}">${ic("userx", 18)}</button>
   </div>`).join("");
-  const gone = removed.map((s) => `<div class="row">
+  const gone = removed.map((s) => `<div class="row clickable" data-action="open-profile" data-id="${esc(s.id)}" data-name="${esc(s.name)}" role="button">
     <div class="av ${avClass(s.name)}">${initials(s.name)}</div>
     <div class="grow"><b class="who" style="font-size:14.5px">${esc(s.name)}</b>
       <div class="small muted">Hidden everywhere · history kept</div></div>
@@ -861,7 +852,7 @@ function renderPlan(state) {
       const mark = markFor(st);
       return `<td><button type="button" class="markc ${mark.cls}" data-action="plan-cell" data-name="${esc(r.name)}" data-day="${d}" title="Click to toggle working, right-click or long-press for holiday">${mark.txt}</button></td>`;
     }).join("");
-    return `<tr><td class="name">${esc(r.name)}</td>${cells}</tr>`;
+    return `<tr><td class="name"><button type="button" class="name-btn" data-action="open-profile" data-id="${esc(r.memberId || "")}" data-name="${esc(r.name)}">${esc(r.name)}</button></td>${cells}</tr>`;
   }).join("");
   const foot = `<tr>${`<td class="name muted" style="font-weight:500">Working</td>`}${counts.map((n) => `<td style="font-weight:700;color:var(--mut)">${n}</td>`).join("")}</tr>`;
   const weekLabel = monday === mondayOf(today) ? "This week" : "Week";
@@ -981,6 +972,127 @@ function modalStaffAdd() {
         </div>
       </form>
     </div>
+  </div>`;
+}
+
+
+function renderProfile(state) {
+  const ref = state.selectedProfile;
+  if (!ref) return "";
+  const d = state.data;
+  const p = buildProfile(ref, d.staff, d.checkouts, d.rotas, state.today);
+  const orow = matchOptimoRider(d.optimo?.riders, p.member?.id || ref.id, p.name, d.staff);
+  const tab = state.profileTab || (orow?.reviews?.length ? "reviews" : "kit");
+  const period = d.optimo?.period || currentPeriod(state.today);
+  const periodLabel = period.label || (period.start ? formatRangeShort(period.start, period.end ? addDays(period.end, -1) : period.start) : "");
+  const extras = orow ? {
+    today: extraToday(orow, state.today),
+    week: extraWeek(orow, d.optimo?.week || {}),
+    period: extraPeriod(orow),
+  } : {};
+  const todayRecs = p.todayKit || [];
+  const todayItems = todayRecs.flatMap((r) => r.items || []);
+  const todayBike = todayItems.find((it) => /bike/i.test(it.type || it.kind || it.name || ""));
+  const assigned = todayRecs.length
+    ? `Assigned today${todayBike ? " · " + (todayBike.number ? "Bike " + todayBike.number : (todayBike.name || "")) : ""}`
+    : "";
+  const s = p.summary;
+  const worked = s.workedPeriod;
+  const dropLines = orow && (extras.today != null || extras.week != null || extras.period != null)
+    ? [extras.today != null ? "Today so far " + extraWithValue(extras.today) : null,
+       extras.week != null ? "This week " + extraWithValue(extras.week) : null,
+       extras.period != null ? "Period " + extraWithValue(extras.period) : null].filter(Boolean).join("<br>")
+    : "Not available yet";
+  const thisWeek = p.rotaDays.filter((rd) => rd.weekStarting === state.weekMonday || (rd.date >= state.weekMonday && rd.date <= addDays(state.weekMonday, 4)));
+  const weekDots = WEEKDAYS.map((d, i) => {
+    const date = addDays(state.weekMonday, i);
+    const rd = thisWeek.find((x) => x.date === date || x.day === d);
+    const mark = markFor(rd?.status || "none");
+    return `<span class="week-d"><span class="markc ${mark.cls}">${mark.txt}</span><span>${d}</span></span>`;
+  }).join("");
+
+  const reviews = orow?.reviews || [];
+  const kitShown = state.profileShowAllKit ? p.kitDays : p.kitDays.slice(0, 10);
+  const facts = [
+    `${s.daysWithKit} day${s.daysWithKit === 1 ? "" : "s"} with kit`,
+    s.topBike ? `Most used bike: ${s.topBike.label} · ${s.topBike.days} day${s.topBike.days === 1 ? "" : "s"}` : null,
+    s.distinctItems > 0 ? `${s.distinctItems} different item${s.distinctItems === 1 ? "" : "s"} used` : null,
+    s.lastActive ? `Last active: ${formatLong(s.lastActive)}` : null,
+  ].filter(Boolean);
+
+  const reviewBlock = reviews.length
+    ? reviews.slice(0, 4).map((r) => `<div class="rev">
+        <div class="rev-top"><b>${r.score != null ? esc(String(r.score)) + " ★" : "–"}</b><span class="muted small">${esc(r.date ? formatShort(r.date) : "")}</span></div>
+        <div>${esc(r.text || "No comment left")}</div>
+        ${r.customer || r.location ? `<div class="small muted">${esc([r.customer, r.location ? "Location " + r.location : ""].filter(Boolean).join(" · "))}</div>` : ""}
+      </div>`).join("")
+    : `<p class="muted">${d.optimo?.riders ? (orow ? "No reviews this period" : "No OptimoRoute record for " + esc(p.name)) : "Review data not available yet"}</p>`;
+
+  const kitBlock = p.kitDays.length
+    ? kitShown.map(([date, recs]) => {
+        const rd = riderDays(recs)[0];
+        return `<div class="kit-day">
+          <div class="cap">${esc(formatWeekdayLong(date))}</div>
+          ${rd ? `<div class="row"><div class="grow"><div class="meta">${kitChips(kitLines(rd.items))}</div></div><span class="small muted">${esc(rd.time || "")}</span></div>` : ""}
+        </div>`;
+      }).join("")
+    : `<p class="muted">No kit checked out yet</p>`;
+
+  const score = orow?.reviewScore;
+  return `
+  <div class="profile-back" data-action="close-profile">
+    <aside class="profile-panel" data-stop="1" role="dialog" aria-label="${esc(p.name)}'s profile">
+      <div class="profile-top">
+        <button type="button" class="link" data-action="close-profile">‹ Back</button>
+        <button type="button" class="link strong" data-action="assign-open" data-rider="${esc(p.member?.id || "")}" data-name="${esc(p.name)}">Assign kit ›</button>
+      </div>
+      <div class="profile-who">
+        <div class="av l ${avClass(p.name)}">${initials(p.name)}</div>
+        <div>
+          <h2>${esc(p.name)}</h2>
+          ${p.roleLine ? `<div class="muted">${esc(p.roleLine)}</div>` : ""}
+          ${!p.member ? `<div class="small muted">Not in the staff list — from checkout records</div>` : ""}
+          ${assigned ? `<span class="badge bg-a" style="margin-top:8px;display:inline-flex">${esc(assigned)}</span>` : ""}
+        </div>
+      </div>
+      ${periodLabel ? `<div class="small muted" style="margin:8px 0 12px">Period ${esc(periodLabel)}</div>` : ""}
+      <div class="profile-kpis">
+        <div class="glass box">
+          <div class="v">${score == null ? "—" : esc(String(score))}${score == null ? "" : " ★"}</div>
+          <div class="l">Review score</div>
+          <div class="small muted">${orow?.reviewCount ? esc(String(orow.reviewCount)) + " rating" + (orow.reviewCount === 1 ? "" : "s") : "No ratings yet"}</div>
+        </div>
+        <div class="glass box">
+          <div class="v">${esc(displayCount(extras.period ?? extras.week ?? extras.today))}</div>
+          <div class="l">Extra drops</div>
+          <div class="small muted">${dropLines}</div>
+        </div>
+        <div class="glass box"${p.onRota ? ` data-action="profile-open-rota" data-name="${esc(p.name)}" role="button"` : ""}>
+          <div class="v">${worked ? esc(worked.worked + " / " + worked.rostered) : "—"}</div>
+          <div class="l">Worked this period</div>
+          <div class="small muted">${p.onRota ? "" : "Not on the rota"}</div>
+        </div>
+        <div class="glass box">
+          <div class="v">${esc(String(s.checkouts))}</div>
+          <div class="l">Assignments</div>
+          <div class="small muted">${s.topBike ? "mostly " + esc(s.topBike.label) : ""}</div>
+        </div>
+      </div>
+      ${p.onRota ? `<div class="cap" style="margin:16px 0 8px">This week</div><div class="week-dots">${weekDots}</div>` : ""}
+      ${todayRecs.length ? `<div class="cap" style="margin:16px 0 8px">Kit assigned today</div>
+        <div class="panel">${kitChips(kitLines(todayItems)) ? `<div class="row"><div class="meta">${kitChips(kitLines(todayItems))}</div></div>` : `<div class="row"><p class="muted">Nothing assigned</p></div>`}</div>` : ""}
+      <div class="seg" style="margin:16px 0 12px">
+        <button type="button" class="${tab === "reviews" ? "on" : ""}" data-action="profile-tab" data-tab="reviews">Reviews</button>
+        <button type="button" class="${tab === "kit" ? "on" : ""}" data-action="profile-tab" data-tab="kit">Kit history</button>
+      </div>
+      ${tab === "reviews" ? `<div class="panel" style="padding:12px 14px">${reviewBlock}</div>` : `
+        <div class="facts">${facts.map((f) => `<div class="small muted">${esc(f)}</div>`).join("")}
+          ${s.daysWithKit ? `<button type="button" class="link" data-action="profile-open-history" data-name="${esc(p.name)}">Open in History ›</button>` : ""}
+        </div>
+        ${kitBlock}
+        ${p.kitDays.length > 10 ? `<button type="button" class="link" data-action="profile-kit-more">${state.profileShowAllKit ? "Show fewer" : "Show all " + p.kitDays.length + " days"}</button>` : ""}
+      `}
+    </aside>
   </div>`;
 }
 

@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   addRepair, applyRotaEditsToFeed, assignmentHistory, blockedText, bikeDisplayStatus,
-  currentCheckouts, daysLabel, effectiveStaff, extraToday, extraWeek, forDisplay,
-  heldByOther, historyRepairs, isRemovedRow, markFixed, nextNumber,
-  openRepairs, planChanges, requireFree, undoRepair, visibleRota, whatsAppMessage,
+  buildProfile, currentCheckouts, daysLabel, effectiveStaff, extraToday, extraWeek,
+  extraWithValue, forDisplay, heldByOther, historyRepairs, isRemovedRow, kitBikeRow,
+  markFixed, nextNumber, openRepairs, planChanges, pounds, POUNDS_PER_EXTRA,
+  requireFree, tapFilter, THRESHOLD_DROPS, undoRepair, visibleRota, whatsAppMessage,
   whatsAppUrl,
 } from "../js/logic.js";
 import { mondayOf as dateMonday, londonToday, currentPeriod, addDays } from "../js/date.js";
@@ -129,7 +130,7 @@ describe("extra drops / WhatsApp", () => {
   ];
   it("skips 0 and unknown, sorts highest first then name", () => {
     const msg = whatsAppMessage(riders, week, "2026-11-17");
-    assert.equal(msg, "Extra drops w/c 16 Nov\nHarrison 87\nMo 12\nShane 12");
+    assert.equal(msg, "Extra drops w/c 16 Nov\nHarrison 87 extra · £174\nMo 12 extra · £24\nShane 12 extra · £24");
     const url = whatsAppUrl(riders, week, "2026-11-17");
     assert.ok(url.startsWith("https://wa.me/447424687181?text="));
     assert.ok(url.includes("%0A"));
@@ -202,5 +203,67 @@ describe("parsers", () => {
     assert.equal(feed.rotas[0].riders[0].days.Mon, "working");
     assert.equal(feed.rotas[0].riders[0].days.Tue, "none");
     assert.equal(feed.rotas[0].riders[0].days.Wed, "holiday");
+  });
+});
+
+describe("extra drop value", () => {
+  it("is extra × £2, never applies the 80-drop threshold", () => {
+    assert.equal(POUNDS_PER_EXTRA, 2);
+    assert.equal(THRESHOLD_DROPS, 80);
+    assert.equal(pounds(14), "£28");
+    assert.equal(pounds(0), "£0");
+    assert.equal(pounds(1200), "£2,400");
+    assert.equal(pounds(null), "—");
+    assert.equal(extraWithValue(14), "14 extra · £28");
+    assert.equal(extraWithValue(null), "—");
+  });
+});
+
+describe("kit chips and rows", () => {
+  it("tapping a selected chip or the total clears the filter", () => {
+    assert.equal(tapFilter("off_road", "off_road", "all"), "all");
+    assert.equal(tapFilter("all", "repair", "all"), "repair");
+    assert.equal(tapFilter("repair", "all", "all"), "all");
+  });
+  it("bike rows use Off the road / Needs repair / With / At base and leave status logic alone", () => {
+    const bike = { id: "b4", name: "Bike 4", status: "ok" };
+    const off = kitBikeRow({ id: "b10", name: "Bike 10", status: "off_road" }, null, [], null);
+    assert.equal(off.status, "Off the road");
+    assert.equal(off.tone, "r");
+    const repair = kitBikeRow(bike, null, [{ id: "1", bike: "Bike 4", type: "lights", offRoad: false }], null);
+    assert.equal(repair.status, "Needs repair");
+    assert.equal(repair.tone, "a");
+    const withRider = kitBikeRow({ id: "b1", name: "Bike 1", status: "ok" }, null, [], { riderName: "Shane" });
+    assert.equal(withRider.status, "With Shane");
+    const base = kitBikeRow({ id: "b1", name: "Bike 1", status: "ok" }, null, [], null);
+    assert.equal(base.status, "At base");
+  });
+});
+
+describe("employee profile", () => {
+  it("groups this person's kit history and counts worked days in the period", () => {
+    const staff = [{ id: "s1", name: "Shane", role: "Rider", days: ["Mon", "Tue", "Wed", "Thu", "Fri"], source: "jenny" }];
+    const checkouts = [
+      { riderId: "s1", riderName: "Shane", date: "2026-11-16", at: "2026-11-16T08:12:00Z", items: [{ type: "bike", number: "7", barcode: "B7" }, { type: "battery", number: "31", barcode: "BAT31" }] },
+      { riderName: "Shane", date: "2026-11-13", at: "2026-11-13T08:05:00Z", items: [{ type: "bike", number: "7", barcode: "B7" }] },
+      { riderName: "Bryan", date: "2026-11-16", items: [{ type: "bike", number: "3", barcode: "B3" }] },
+    ];
+    const rotas = [{
+      weekStarting: "2026-11-16",
+      dates: { Mon: "2026-11-16", Tue: "2026-11-17", Wed: "2026-11-18", Thu: "2026-11-19", Fri: "2026-11-20" },
+      riders: [{ name: "Shane", days: { Mon: "working", Tue: "working", Wed: "working", Thu: "working", Fri: "working" } }],
+    }];
+    const p = buildProfile({ id: "s1", name: "Shane" }, staff, checkouts, rotas, "2026-11-17");
+    assert.equal(p.name, "Shane");
+    assert.equal(p.summary.daysWithKit, 2);
+    assert.equal(p.summary.checkouts, 2);
+    assert.equal(p.summary.topBike.label, "Bike 7");
+    assert.equal(p.summary.topBike.days, 2);
+    assert.equal(p.kitDays[0][0], "2026-11-16");
+    assert.equal(p.todayKit.length, 0);
+    assert.equal(p.onRota, true);
+    assert.equal(p.summary.workedPeriod.worked, 2);
+    assert.equal(p.summary.workedPeriod.rostered, 5);
+    assert.ok(p.roleLine.includes("Rider"));
   });
 });

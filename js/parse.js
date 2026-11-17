@@ -69,6 +69,7 @@ export function parseItems(text) {
     barcode: normaliseBarcode(str(o, "barcode") || str(o, "code")),
     status: str(o, "status").toLowerCase() || "ok",
     outOfService: Boolean(o.outOfService || o.out_of_service || String(o.status || "").toLowerCase() === "out_of_service"),
+    retired: Boolean(o.retired),
     notes: str(o, "notes"),
     raw: o,
   })).filter((i) => i.id || i.barcode || i.number);
@@ -226,6 +227,7 @@ export function parseStock(text) {
     qty: num(o, "qty") ?? num(o, "quantity") ?? num(o, "count") ?? 0,
     reorderAt: num(o, "reorderAt") ?? num(o, "reorder") ?? num(o, "min"),
     unit: str(o, "unit"),
+    appliesTo: (str(o, "appliesTo") || str(o, "brakes") || str(o, "brand") || "").toLowerCase(),
     notes: str(o, "notes"),
     raw: o,
   })).filter((p) => p.id || p.name);
@@ -293,6 +295,11 @@ export function parseOptimo(text) {
     end: str(root.week, "end"),
     label: str(root.week, "label"),
   } : {};
+  const period = root.period && typeof root.period === "object" ? {
+    start: str(root.period, "start"),
+    end: str(root.period, "end"),
+    label: str(root.period, "label"),
+  } : null;
   const riders = asArray(root.riders ?? root.stats ?? root).map((o) => ({
     id: str(o, "id") || str(o, "riderId") || str(o, "staffId"),
     name: str(o, "name") || str(o, "rider") || str(o, "riderName"),
@@ -301,14 +308,21 @@ export function parseOptimo(text) {
     extraDropsWeek: num(o, "extraDropsWeek"),
     extraDropsByDay: asArray(o.extraDropsByDay).map((d) => ({
       date: str(d, "date"),
-      count: num(d, "count") ?? num(d, "extraDrops") ?? 0,
+      count: num(d, "count") ?? num(d, "extra") ?? num(d, "extraDrops") ?? 0,
     })),
-    reviewScore: num(o, "reviewScore") ?? num(o, "score") ?? num(o, "rating"),
-    reviewCount: num(o, "reviewCount") ?? num(o, "reviews"),
+    reviewScore: num(o, "reviewScore") ?? num(o, "avgRating") ?? num(o, "score") ?? num(o, "rating"),
+    reviewCount: num(o, "reviewCount") ?? num(o, "ratingCount") ?? (Array.isArray(o.reviews) ? o.reviews.length : null),
+    reviews: asArray(o.reviews).map((r) => ({
+      date: str(r, "date"),
+      score: num(r, "score") ?? num(r, "rating"),
+      text: str(r, "text") || str(r, "comment") || null,
+      customer: str(r, "customer") || null,
+      location: str(r, "location") || null,
+    })),
     raw: o,
   })).filter((r) => r.id || r.name);
   const previousPeriod = root.previousPeriod && typeof root.previousPeriod === "object" ? root.previousPeriod : null;
-  return { week, riders, previousPeriod, raw: root };
+  return { week, riders, period, updatedAt: str(root, "updatedAt"), previousPeriod, raw: root };
 }
 
 export function parseHandover(text) {
