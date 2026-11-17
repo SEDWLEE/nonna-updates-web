@@ -1,0 +1,14 @@
+.DS_Store
+node_modules/
+.env
+.env.*
+*.local
+*.log
+.idea/
+.vscode/
+# Never commit tokens, pins, or data snapshots
+*token*
+*secret*
+*credential*
+*.pem
+data/

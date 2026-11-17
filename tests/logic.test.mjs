@@ -1,0 +1,193 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import {
+  addRepair, applyRotaEditsToFeed, assignmentHistory, blockedText, bikeDisplayStatus,
+  currentCheckouts, daysLabel, effectiveStaff, extraToday, extraWeek, forDisplay,
+  heldByOther, historyRepairs, isRemovedRow, markFixed, nextNumber,
+  openRepairs, planChanges, requireFree, undoRepair, visibleRota, whatsAppMessage,
+  whatsAppUrl,
+} from "../js/logic.js";
+import { mondayOf as dateMonday, londonToday, currentPeriod, addDays } from "../js/date.js";
+import { normaliseBarcode, sameBarcode, parseItems, parseRepairs } from "../js/parse.js";
+
+describe("dates", () => {
+  it("mondayOf lands on Monday", () => {
+    assert.equal(dateMonday("2026-11-17"), "2026-11-16"); // Tuesday
+    assert.equal(dateMonday("2026-11-16"), "2026-11-16");
+    assert.equal(dateMonday("2026-11-22"), "2026-11-16");
+  });
+  it("26th-to-26th period", () => {
+    assert.deepEqual(currentPeriod("2026-11-17"), { start: "2026-10-26", end: "2026-11-26" });
+    assert.deepEqual(currentPeriod("2026-11-26"), { start: "2026-11-26", end: "2026-12-26" });
+  });
+  it("londonToday is YYYY-MM-DD", () => {
+    assert.match(londonToday(), /^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe("barcodes", () => {
+  it("normalises and compares case-insensitively", () => {
+    assert.equal(normaliseBarcode("  ABC\u0001123  "), "ABC123");
+    assert.ok(sameBarcode("ab-1", "AB-1"));
+    assert.ok(!sameBarcode("", ""));
+  });
+});
+
+describe("daily reset", () => {
+  it("only treats today's London date as current kit", () => {
+    const recs = [
+      { date: "2026-11-17", riderName: "Shane", items: [{ barcode: "B7" }] },
+      { date: "2026-11-16", riderName: "Bryan", items: [{ barcode: "B4" }] },
+    ];
+    const cur = currentCheckouts(recs, "2026-11-17");
+    assert.equal(cur.length, 1);
+    assert.equal(cur[0].riderName, "Shane");
+  });
+});
+
+describe("assignment guard", () => {
+  const checkouts = [
+    { date: "2026-11-17", riderId: "bryan", riderName: "Bryan", items: [{ barcode: "bike-7", number: "7", type: "bike" }] },
+    { date: "2026-11-16", riderId: "shane", riderName: "Shane", items: [{ barcode: "bike-4", number: "4", type: "bike" }] },
+  ];
+  it("blocks an item already with someone else today", () => {
+    const other = heldByOther("BIKE-7", "shane", "Shane", checkouts, "2026-11-17");
+    assert.equal(other.riderName, "Bryan");
+    assert.equal(blockedText("Bike 7", "Bryan"), "Bike 7 is already with Bryan");
+    assert.throws(() => requireFree([{ barcode: "bike-7", number: "7", type: "bike" }], "shane", "Shane", checkouts, "2026-11-17"));
+  });
+  it("does not block the same rider or yesterday's assignment", () => {
+    assert.equal(heldByOther("bike-7", "bryan", "Bryan", checkouts, "2026-11-17"), null);
+    assert.equal(heldByOther("bike-4", "bryan", "Bryan", checkouts, "2026-11-17"), null);
+  });
+});
+
+describe("removed staff on rota", () => {
+  const staff = [
+    { id: "alex", name: "Alex Smith", active: false },
+    { id: "shane", name: "Shane", active: true },
+    { id: "bryan", name: "Bryan", active: true },
+  ];
+  it("matches by id, full name, or unique first name", () => {
+    assert.ok(isRemovedRow("Alex", "alex", [staff[0]], staff));
+    assert.ok(isRemovedRow("Alex Smith", null, [staff[0]], staff));
+    assert.ok(isRemovedRow("Alex", null, [staff[0]], staff));
+    assert.ok(!isRemovedRow("Shane", "shane", [staff[0]], staff));
+  });
+  it("hides current/future weeks only", () => {
+    const riders = [{ name: "Alex" }, { name: "Shane" }];
+    const hidden = visibleRota({ weekStarting: "2026-11-16", riders }, staff, "2026-11-17");
+    assert.deepEqual(hidden.riders.map((r) => r.name), ["Shane"]);
+    const past = visibleRota({ weekStarting: "2026-11-09", riders }, staff, "2026-11-17");
+    assert.equal(past.riders.length, 2);
+  });
+  it("keeps a first-name clash visible", () => {
+    const clash = [...staff, { id: "alex2", name: "Alex Jones", active: true }];
+    assert.ok(!isRemovedRow("Alex", null, [staff[0]], clash));
+  });
+});
+
+describe("effective staff", () => {
+  it("overlays staff.json and hides removed", () => {
+    const feed = [{ id: "shane", name: "Shane" }, { id: "alex", name: "Alex" }];
+    const overlay = [{ id: "alex", name: "Alex", active: false }, { id: "dev", name: "Dev", active: true }];
+    const all = effectiveStaff(feed, overlay);
+    assert.deepEqual(forDisplay(all).map((s) => s.name).sort(), ["Dev", "Shane"]);
+  });
+});
+
+describe("repairs", () => {
+  it("open vs history and off-the-road display status", () => {
+    const list = [
+      { id: "1", bike: "Bike 10", type: "electrics", offRoad: true, loggedAt: "2026-11-16T12:00:00Z" },
+      { id: "2", bike: "Bike 7", type: "tyre", offRoad: false, loggedAt: "2026-11-16T12:00:00Z", fixedAt: "2026-11-17T10:00:00Z", fixedBy: "Sam" },
+    ];
+    assert.equal(openRepairs(list).length, 1);
+    assert.equal(historyRepairs(list)[0].id, "2");
+    const bike10 = { id: "10", name: "Bike 10", number: "10", status: "on_road" };
+    assert.equal(bikeDisplayStatus(bike10, null, list).key, "off_road");
+    const bike7 = { id: "7", name: "Bike 7", number: "7", status: "on_road" };
+    assert.equal(bikeDisplayStatus(bike7, null, list).key, "on_road");
+    const withOpen = addRepair(list, { id: "3", bike: "Bike 7", type: "brakes", offRoad: false, loggedAt: "x" });
+    assert.equal(bikeDisplayStatus(bike7, null, withOpen).key, "needs_repair");
+    const fixed = markFixed(withOpen, "3", "2026-11-17T11:00:00Z", "Sam");
+    assert.equal(openRepairs(fixed).length, 1);
+    const undone = undoRepair(withOpen, "3");
+    assert.equal(undone.some((r) => r.id === "3"), false);
+    assert.equal(undoRepair(list, "2").some((r) => r.id === "2"), true);
+  });
+});
+
+describe("extra drops / WhatsApp", () => {
+  const week = { start: "2026-11-16", end: "2026-11-23", label: "w/c 16 Nov" };
+  const riders = [
+    { name: "Harrison", extraDropsWeek: 87, extraDropsToday: 87, extraDrops: 87 },
+    { name: "Shane", extraDropsWeek: 12, extraDropsByDay: [{ date: "2026-11-17", count: 4 }] },
+    { name: "Alex", extraDropsWeek: 0, extraDropsToday: 0 },
+    { name: "Mo", extraDropsWeek: 12 },
+    { name: "Unknown" },
+  ];
+  it("skips 0 and unknown, sorts highest first then name", () => {
+    const msg = whatsAppMessage(riders, week, "2026-11-17");
+    assert.equal(msg, "Extra drops w/c 16 Nov\nHarrison 87\nMo 12\nShane 12");
+    const url = whatsAppUrl(riders, week, "2026-11-17");
+    assert.ok(url.startsWith("https://wa.me/447424687181?text="));
+    assert.ok(url.includes("%0A"));
+    assert.ok(!url.includes("Alex"));
+  });
+  it("derives today/week from extraDropsByDay when missing", () => {
+    const r = { name: "Dev", extraDropsByDay: [{ date: "2026-11-16", count: 3 }, { date: "2026-11-17", count: 5 }] };
+    assert.equal(extraToday(r, "2026-11-17"), 5);
+    assert.equal(extraWeek(r, week), 8);
+  });
+});
+
+describe("rota feed writes preserve staff and updates", () => {
+  it("only touches rotas[]", () => {
+    const root = {
+      updates: [{ id: 1, text: "hello" }],
+      staff: [{ name: "Jenny's person" }],
+      rotas: [{ weekStarting: "2026-11-16", riders: [{ name: "Shane", days: { Monday: "working" } }] }],
+    };
+    const next = applyRotaEditsToFeed(root, [
+      { weekStarting: "2026-11-16", riderName: "Shane", day: "Tuesday", status: "working" },
+    ], "Sam", "2026-11-17T12:00:00Z");
+    assert.deepEqual(next.updates, root.updates);
+    assert.deepEqual(next.staff, root.staff);
+    assert.equal(next.rotas[0].riders[0].days.Tuesday, "working");
+  });
+  it("creates a missing week in rotas[]", () => {
+    const root = { updates: [], staff: [], rotas: [] };
+    const next = applyRotaEditsToFeed(root, [
+      { weekStarting: "2026-11-23", riderName: "Shane", day: "Monday", status: "holiday" },
+    ], "Sam", "at");
+    assert.equal(next.rotas.length, 1);
+    assert.equal(next.rotas[0].weekStarting, "2026-11-23");
+    assert.equal(next.rotas[0].riders[0].days.Monday, "holiday");
+    assert.equal(next.updates.length, 0);
+  });
+  it("planChanges reports diffs only", () => {
+    const saved = { Shane: { Monday: "working", Tuesday: "none" } };
+    const edited = { Shane: { Monday: "working", Tuesday: "holiday" } };
+    const ch = planChanges("2026-11-16", saved, edited);
+    assert.equal(ch.length, 1);
+    assert.equal(ch[0].day, "Tuesday");
+  });
+});
+
+describe("helpers", () => {
+  it("daysLabel and nextNumber", () => {
+    assert.equal(daysLabel(["Monday","Tuesday","Wednesday","Thursday","Friday"]), "Mon–Fri");
+    assert.equal(nextNumber([{ kind: "bike", number: "14" }, { kind: "bike", number: "2" }], "bike"), "15");
+  });
+});
+
+describe("parsers", () => {
+  it("parseItems and parseRepairs", () => {
+    const items = parseItems(JSON.stringify({ items: [{ id: "b7", type: "bike", number: "7", barcode: " x " }] }));
+    assert.equal(items[0].kind, "bike");
+    assert.equal(items[0].barcode, "x");
+    const repairs = parseRepairs(JSON.stringify({ repairs: [{ id: "1", bike: "Bike 7", type: "tyre" }] }));
+    assert.equal(repairs[0].bike, "Bike 7");
+  });
+});

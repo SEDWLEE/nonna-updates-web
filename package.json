@@ -1,0 +1,11 @@
+{
+  "name": "nonna-updates-web",
+  "private": true,
+  "type": "module",
+  "description": "Free web client for Nonna Updates. Site code only — no staff data, PINs or tokens in plaintext.",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "set-pin": "node scripts/set-pin.mjs",
+    "start": "python3 -m http.server 8080"
+  }
+}

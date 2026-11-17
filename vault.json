@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "kdf": "PBKDF2",
+  "hash": "SHA-256",
+  "iter": 600000,
+  "salt": "Xt5+IWr8RJe+H6923zNXLA==",
+  "iv": "eFlUy3EWmkIPxVdQ",
+  "ct": "V3g3AQt5unTK4SGxtcy8dXc1whg1Y0orcqX1UYhlcfiY97Egd5GE9mNgMvFLwUBx8fFjUrfBTOoAE/yRGdV6686HUbdSxYoxXWpOWgp1qNHgNz8ohPyh0oD6WDfq1DEaf7eLUbdW8grKwjUdRA==",
+  "configured": true
+}
